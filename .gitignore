@@ -33,6 +33,30 @@ coverage/
 # Temporary files
 tmp/
 temp/
+/tmp/
+*.tmp
+/session-context.md
+
+# Session & Planning Files (keep locally only)
+*_SESSION_*.md
+*_HISTORY.md
+*_RECOVERY_*.md
+*_SUMMARY.md
+*_UPDATE*.md
+*.txt
+!README.md
+QUICK_STATUS.txt
+PHASE2_REDIS_VERIFICATION.txt
+READY_TO_BUILD.txt
+READY_TO_USE_PROMPTS.md
+SESSION_CONTEXT.md
+SESSION_HISTORY.md
+SESSION_RECOVERY_GUIDE.md
+DEBUGGING_*.md
+EXECUTION_CHECKLIST.md
+PHASE_*.md
+PHASE2_*.md
+STATS_UPDATE.md
 
 # AI & Documentation Files (keep locally only)
 .github/copilot/
@@ -40,10 +64,21 @@ temp/
 CLAUDE.md
 GEMINI.md
 AGENTS.md
+GEMINI_GUIDANCE.md
+COPILOT_*.md
+CONTEXT_INJECTION_GUIDE.md
+DEVELOPMENT_GUIDE.md
+FILE_MANIFEST.md
+INDEX.md
+MASTER_SUMMARY.md
+NEXT_SESSION_QUICKSTART.md
+PROJECT_SUMMARY.md
+PROJECT_STATUS.md
+QUICK_START.md
 copilot-instructions.md
 
 # Planning & Reference Docs (not for GitHub)
 *.md
 !README.md
 verify-project.sh
-READY_TO_BUILD.txt
+setup.sh

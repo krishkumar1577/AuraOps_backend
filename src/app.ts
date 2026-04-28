@@ -1,14 +1,16 @@
 import Fastify, { FastifyInstance } from 'fastify';
 import { blueprintRoutes } from './api/routes/blueprint.routes';
+import { registerSWRRoutes } from './api/routes/swr.routes';
 import { logger } from './utils/logger';
 import config from './utils/config';
 
 export async function createApp(): Promise<FastifyInstance> {
   const fastify = Fastify({
-    logger: logger,
+    logger: true,
   });
 
   fastify.register(blueprintRoutes);
+  fastify.register(registerSWRRoutes);
 
   fastify.get('/health', async () => {
     return { status: 'healthy', timestamp: new Date().toISOString() };
@@ -23,6 +25,10 @@ export async function createApp(): Promise<FastifyInstance> {
         health: '/health',
         blueprintGenerate: 'POST /api/v1/blueprint/generate',
         blueprintGet: 'GET /api/v1/blueprint/:blueprintId',
+        weightsListAll: 'GET /api/v1/weights',
+        weightsGet: 'GET /api/v1/weights/:hash',
+        weightsPull: 'POST /api/v1/weights/pull',
+        weightsStats: 'GET /api/v1/weights/stats',
       },
     };
   });

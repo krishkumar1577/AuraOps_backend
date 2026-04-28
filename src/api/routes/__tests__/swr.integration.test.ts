@@ -235,7 +235,7 @@ describe('SWR API Routes', () => {
         const request = {
           body: {
             modelName: 'gpt2',
-            hash: 'abc123',
+            modelHash: 'abc123',
             source: 'huggingface',
           },
         };
@@ -265,7 +265,7 @@ describe('SWR API Routes', () => {
         const request = {
           body: {
             modelName: 'bert',
-            hash: 'def456',
+            modelHash: 'def456',
             source: 'https://example.com/weights.bin',
           },
         };
@@ -292,7 +292,7 @@ describe('SWR API Routes', () => {
         const request = {
           body: {
             modelName: '',
-            hash: '',
+            modelHash: '',
             source: 'invalid',
           },
         };
@@ -326,7 +326,7 @@ describe('SWR API Routes', () => {
             totalWeights: expect.any(Number),
             totalSizeGB: expect.any(Number),
             cacheHitRate: expect.any(Number),
-            averageAgeDays: expect.any(Number),
+            timing: expect.any(String),
           })
         );
       }
