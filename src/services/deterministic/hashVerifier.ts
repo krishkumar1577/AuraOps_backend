@@ -23,7 +23,7 @@ export class HashVerifier {
       }
 
       const lockContent = await this.readLockFile(lockPath);
-      const fingerprint = await this.getFingerprintmetadata(lockPath);
+      const fingerprint = await this.getFingerprintMetadata(lockPath);
 
       const combined = JSON.stringify({
         osType: fingerprint.osType,
@@ -76,7 +76,7 @@ export class HashVerifier {
     }
   }
 
-  async getFingerprintmetadata(lockPath: string): Promise<EnvironmentFingerprint> {
+  async getFingerprintMetadata(lockPath: string): Promise<EnvironmentFingerprint> {
     const start = Date.now();
 
     try {

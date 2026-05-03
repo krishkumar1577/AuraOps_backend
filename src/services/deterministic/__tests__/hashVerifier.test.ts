@@ -217,12 +217,12 @@ describe('HashVerifier', () => {
     });
   });
 
-  describe('getFingerprintmetadata', () => {
+  describe('getFingerprintMetadata', () => {
     it('should return fingerprint metadata', async () => {
       const content = 'torch==2.0.0\ntransformers==4.30.0\n';
       await fs.writeFile(testLockPath, content);
 
-      const fingerprint = await verifier.getFingerprintmetadata(testLockPath);
+      const fingerprint = await verifier.getFingerprintMetadata(testLockPath);
 
       expect(fingerprint).toBeDefined();
       expect(fingerprint.osType).toBe('Darwin');
@@ -240,7 +240,7 @@ describe('HashVerifier', () => {
         'torch==2.0.0\ntransformers==4.30.0\nlangchain==0.1.0\n# comment\nnumpy@latest\n';
       await fs.writeFile(testLockPath, content);
 
-      const fingerprint = await verifier.getFingerprintmetadata(testLockPath);
+      const fingerprint = await verifier.getFingerprintMetadata(testLockPath);
 
       expect(fingerprint.packageCount).toBeGreaterThanOrEqual(3);
     });
@@ -249,14 +249,14 @@ describe('HashVerifier', () => {
       const emptyPath = path.join(tempDir, 'empty.txt');
       await fs.writeFile(emptyPath, '\n\n\n');
 
-      await expect(verifier.getFingerprintmetadata(emptyPath)).rejects.toThrow(ValidationError);
+      await expect(verifier.getFingerprintMetadata(emptyPath)).rejects.toThrow(ValidationError);
     });
 
     it('should extract python version from lock file', async () => {
       const content = 'python_version==3.11\ntorch==2.0.0\n';
       await fs.writeFile(testLockPath, content);
 
-      const fingerprint = await verifier.getFingerprintmetadata(testLockPath);
+      const fingerprint = await verifier.getFingerprintMetadata(testLockPath);
 
       expect(fingerprint.pythonVersion).toBeDefined();
     });
@@ -265,7 +265,7 @@ describe('HashVerifier', () => {
       const content = 'torch==2.0.0\ntransformers==4.30.0\n';
       await fs.writeFile(testLockPath, content);
 
-      const fingerprint = await verifier.getFingerprintmetadata(testLockPath);
+      const fingerprint = await verifier.getFingerprintMetadata(testLockPath);
 
       expect(fingerprint.pythonVersion).toBe('3.10');
     });
@@ -274,8 +274,8 @@ describe('HashVerifier', () => {
       const content = 'torch==2.0.0\ntransformers==4.30.0\n';
       await fs.writeFile(testLockPath, content);
 
-      const fingerprint1 = await verifier.getFingerprintmetadata(testLockPath);
-      const fingerprint2 = await verifier.getFingerprintmetadata(testLockPath);
+      const fingerprint1 = await verifier.getFingerprintMetadata(testLockPath);
+      const fingerprint2 = await verifier.getFingerprintMetadata(testLockPath);
 
       expect(fingerprint1.dependencyHash).toBe(fingerprint2.dependencyHash);
     });
@@ -285,7 +285,7 @@ describe('HashVerifier', () => {
       await fs.writeFile(testLockPath, content);
 
       const before = Date.now();
-      const fingerprint = await verifier.getFingerprintmetadata(testLockPath);
+      const fingerprint = await verifier.getFingerprintMetadata(testLockPath);
       const after = Date.now();
 
       expect(fingerprint.timestamp).toBeGreaterThanOrEqual(before);
@@ -293,17 +293,17 @@ describe('HashVerifier', () => {
     });
 
     it('should throw ValidationError for invalid path', async () => {
-      await expect(verifier.getFingerprintmetadata('')).rejects.toThrow(ValidationError);
+      await expect(verifier.getFingerprintMetadata('')).rejects.toThrow(ValidationError);
     });
 
     it('should throw ValidationError for null path', async () => {
-      await expect(verifier.getFingerprintmetadata(null as any)).rejects.toThrow(ValidationError);
+      await expect(verifier.getFingerprintMetadata(null as any)).rejects.toThrow(ValidationError);
     });
 
     it('should throw ValidationError for non-existent file', async () => {
       const nonExistentPath = path.join(tempDir, 'nonexistent.txt');
 
-      await expect(verifier.getFingerprintmetadata(nonExistentPath)).rejects.toThrow(
+      await expect(verifier.getFingerprintMetadata(nonExistentPath)).rejects.toThrow(
         ValidationError,
       );
     });
@@ -312,7 +312,7 @@ describe('HashVerifier', () => {
       const content = 'torch==2.0.0\n';
       await fs.writeFile(testLockPath, content);
 
-      await verifier.getFingerprintmetadata(testLockPath);
+      await verifier.getFingerprintMetadata(testLockPath);
 
       expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('Fingerprint metadata'));
     });
@@ -321,7 +321,7 @@ describe('HashVerifier', () => {
       const packages = Array.from({ length: 100 }, (_, i) => `package${i}==1.0.0`).join('\n');
       await fs.writeFile(testLockPath, packages);
 
-      const fingerprint = await verifier.getFingerprintmetadata(testLockPath);
+      const fingerprint = await verifier.getFingerprintMetadata(testLockPath);
 
       expect(fingerprint.packageCount).toBeGreaterThan(50);
     });
@@ -337,7 +337,7 @@ numpy[test]==1.24.0`;
       await fs.writeFile(testLockPath, content);
 
       const hash = await verifier.hashEnvironment(testLockPath);
-      const fingerprint = await verifier.getFingerprintmetadata(testLockPath);
+      const fingerprint = await verifier.getFingerprintMetadata(testLockPath);
 
       expect(hash).toBeDefined();
       expect(fingerprint.packageCount).toBeGreaterThan(0);
@@ -362,7 +362,7 @@ numpy[test]==1.24.0`;
       await fs.writeFile(testLockPath, content);
 
       const hash = await verifier.hashEnvironment(testLockPath);
-      const fingerprint = await verifier.getFingerprintmetadata(testLockPath);
+      const fingerprint = await verifier.getFingerprintMetadata(testLockPath);
 
       expect(hash).toBeDefined();
       expect(fingerprint).toBeDefined();
@@ -372,7 +372,7 @@ numpy[test]==1.24.0`;
       const content = 'torch==2.0.0\ntransformers==4.30.0\n';
       await fs.writeFile(testLockPath, content);
 
-      const fingerprint = await verifier.getFingerprintmetadata(testLockPath);
+      const fingerprint = await verifier.getFingerprintMetadata(testLockPath);
       const hash = await verifier.hashEnvironment(testLockPath);
       const isValid = await verifier.verifyLockfile(testLockPath, hash);
 
@@ -413,7 +413,7 @@ numpy[test]==1.24.0`;
       await fs.writeFile(testLockPath, content);
 
       const start = Date.now();
-      await verifier.getFingerprintmetadata(testLockPath);
+      await verifier.getFingerprintMetadata(testLockPath);
       const duration = Date.now() - start;
 
       expect(duration).toBeLessThan(1000);
@@ -431,9 +431,73 @@ numpy[test]==1.24.0`;
       await expect(verifier.verifyLockfile('path', 123 as any)).rejects.toThrow(ValidationError);
     });
 
-    it('should enforce strict parameter types for getFingerprintmetadata', async () => {
-      await expect(verifier.getFingerprintmetadata(123 as any)).rejects.toThrow(ValidationError);
-      await expect(verifier.getFingerprintmetadata('' as any)).rejects.toThrow(ValidationError);
+    it('should enforce strict parameter types for getFingerprintMetadata', async () => {
+      await expect(verifier.getFingerprintMetadata(123 as any)).rejects.toThrow(ValidationError);
+      await expect(verifier.getFingerprintMetadata('' as any)).rejects.toThrow(ValidationError);
+    });
+  });
+
+  describe('deployment error handling', () => {
+    it('should preserve ValidationError in hashEnvironment catch block', async () => {
+      await expect(verifier.hashEnvironment(null as any)).rejects.toThrow(ValidationError);
+    });
+
+    it('should preserve ValidationError in verifyLockfile catch block', async () => {
+      await expect(verifier.verifyLockfile(null as any, 'hash')).rejects.toThrow(ValidationError);
+    });
+
+    it('should preserve ValidationError in getFingerprintMetadata catch block', async () => {
+      await expect(verifier.getFingerprintMetadata(null as any)).rejects.toThrow(ValidationError);
+    });
+
+    it('should wrap DeploymentError from readLockFile in hashEnvironment', async () => {
+      const badPath = '/invalid/path/that/causes/error.txt';
+      await expect(verifier.hashEnvironment(badPath)).rejects.toThrow(ValidationError);
+    });
+
+    it('should wrap DeploymentError from readLockFile in verifyLockfile', async () => {
+      const badPath = '/invalid/path/that/causes/error.txt';
+      await expect(verifier.verifyLockfile(badPath, 'hash')).rejects.toThrow();
+    });
+
+    it('should wrap DeploymentError from readLockFile in getFingerprintMetadata', async () => {
+      const badPath = '/invalid/path/that/causes/error.txt';
+      await expect(verifier.getFingerprintMetadata(badPath)).rejects.toThrow();
+    });
+  });
+
+  describe('crypto and hash operations', () => {
+    it('should generate valid SHA256 hashes only', async () => {
+      const content = 'test==1.0.0\n';
+      await fs.writeFile(testLockPath, content);
+
+      const hash = await verifier.hashEnvironment(testLockPath);
+
+      expect(/^[a-f0-9]{64}$/.test(hash)).toBe(true);
+      expect(hash.length).toBe(64);
+    });
+
+    it('should include lockfile content in hash calculation', async () => {
+      const path1 = path.join(tempDir, 'req1.txt');
+      const path2 = path.join(tempDir, 'req2.txt');
+
+      await fs.writeFile(path1, 'torch==2.0.0\n');
+      await fs.writeFile(path2, 'torch==2.0.0\nmodified\n');
+
+      const hash1 = await verifier.hashEnvironment(path1);
+      const hash2 = await verifier.hashEnvironment(path2);
+
+      expect(hash1).not.toBe(hash2);
+    });
+
+    it('should produce deterministic hashes for same environment', async () => {
+      const content = 'torch==2.0.0\n';
+      await fs.writeFile(testLockPath, content);
+
+      const hash1 = await verifier.hashEnvironment(testLockPath);
+      const hash2 = await verifier.hashEnvironment(testLockPath);
+
+      expect(hash1).toBe(hash2);
     });
   });
 });
