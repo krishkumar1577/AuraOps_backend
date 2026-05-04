@@ -1,0 +1,60 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Build output
+dist/
+build/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# Temporary
+tmp/
+temp/
+.cache/
+*.tmp
+
+# Weights cache (local dev)
+weights-cache/
+
+# Lock cache (deterministic builder)
+.lock-cache/
+
+# AuraOps local state
+.auraops/
+
+# Claude / AI config
+.claude/
+CLAUDE.md
+
+# Infrastructure (local only)
+infra/
+
+# Scripts
+verify-project.sh
+setup.sh
