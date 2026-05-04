@@ -111,7 +111,7 @@ export async function deploymentRoutes(
         };
 
         let workerId: string;
-        let workerStartTime = Date.now();
+        const workerStartTime = Date.now();
         try {
           const worker = await orchestrator.acquireWorker(workerRequirements);
           workerId = worker.workerId;
@@ -147,7 +147,7 @@ export async function deploymentRoutes(
         const deploymentId = uuidv4();
         const agentIdRef = { value: '' };
 
-        let agentStartTime = Date.now();
+        const agentStartTime = Date.now();
         try {
           const result = await orchestrator.deployAgent(
             workerId,

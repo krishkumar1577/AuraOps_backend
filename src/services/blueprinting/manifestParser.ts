@@ -41,7 +41,7 @@ export class ManifestParser {
     const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#'));
     const deps: Record<string, string> = {};
 
-    let pythonVersion = '3.11';
+    const pythonVersion = '3.11';
     let torchVersion: string | undefined;
     let langchainVersion: string | undefined;
     let cudaVersion: string | undefined;

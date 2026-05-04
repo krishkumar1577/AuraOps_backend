@@ -77,6 +77,7 @@ async function runLogs(deploymentId: string, options: { follow: boolean; tail?: 
   const pollInterval = 2000;
 
   const poll = async (): Promise<void> => {
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       try {
         const logs = await fetchLogs(apiUrl, deploymentId);
