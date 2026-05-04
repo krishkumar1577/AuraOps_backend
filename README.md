@@ -1,227 +1,122 @@
-# AuraOps Backend MVP
+# AuraOps Backend
 
-Infrastructure as Invisible Code - Deterministic deployment layer for AI agents.
+Deterministic deployment layer for AI agents. Parse a Python project, detect its ML framework, and deploy to GPU infrastructure.
 
-## 🎯 Project Overview
+## What It Does
 
-AuraOps is a backend orchestration layer that eliminates the 60% velocity loss developers experience deploying AI models to production. It guarantees byte-for-byte reproducibility and deploys agents to live GPUs in under 30 seconds (MVP target: <11 seconds).
+**Works standalone (no external services):**
 
-### Core Components
-1. **Blueprinting Engine** - Parse manifests, detect frameworks, generate deterministic specs
-2. **Smart Weight Registry** - Global caching of model weights to eliminate 15GB downloads
-3. **Deterministic Builder** - Lock environments, guarantee reproducibility
-4. **Orchestrator** - Deploy to GPU clouds (Lambda Labs, Together AI, Vast.ai)
+- **`auraops init`** — Point at a Python project directory. Parses `requirements.txt` or `pyproject.toml`, detects the ML framework (PyTorch, LangChain, JAX, Transformers, TensorFlow), infers CUDA version, and generates an immutable `blueprint.json` with checksums.
+- **Blueprint generation** — Selects base Docker image, estimates GPU memory, creates SHA256 hashes for reproducibility.
+- **Volume mount config** — Generates Docker `-v` flags and Kubernetes `volumeMounts` specs from cached weight locations.
+- **Dependency locking** — Wraps `pip-compile` to create lockfiles with hashes for byte-for-byte reproducibility.
+- **Environment fingerprinting** — SHA256 hash of Python version + all dependencies for drift detection.
 
-## 🚀 Quick Start
+**Works with external services (Redis, S3, GPU cloud):**
 
-### Prerequisites
-- Node.js 18+
-- TypeScript 5+
-- npm or yarn
+- **Redis weight cache** — Sub-millisecond lookup of cached model weights, 30-day TTL, LRU eviction.
+- **S3 weight storage** — Stream upload/download of large model files via AWS SDK.
+- **Background job queue** — Bull queue on Redis for async weight pulls from HuggingFace or custom URLs.
+- **GPU providers** — Real API integrations for Lambda Labs, AWS EC2 (g4dn/p3/p4d), and local Docker.
+- **Health checks** — HTTP liveness/readiness probes with retry + exponential backoff.
+- **REST API** — Fastify server with deploy, status, terminate, and list endpoints.
 
-### Installation
+**Not yet production-ready:**
+
+- Orchestrator GPU utilization is hardcoded (not reading real metrics).
+- Deployment records are in-memory (not persisted to Redis/DB).
+- `auraops logs` endpoint is not implemented server-side.
+- No real end-to-end deployment has been tested against live GPU infrastructure.
+
+## Quick Start
 
 ```bash
-# Navigate to project directory
-cd /Users/krish.dev/dev/projects/auraops-backend
-
-# Install dependencies
 npm install
-
-# Set up environment
-cp .env.example .env
-
-# Build TypeScript
 npm run build
-
-# Run development server
-npm run dev
-```
-
-### Development
-
-```bash
-# Start development server with hot reload
-npm run dev
-
-# Run tests
 npm test
 
-# Run tests in watch mode
-npm test:watch
+# Start the API server
+npm run dev
 
-# Type check
-npm run type-check
+# Initialize a project
+npx auraops init ./my-ml-project
 
-# Lint
-npm run lint
+# Deploy (requires server running + external services)
+npx auraops deploy --blueprint .auraops/blueprint.json
+
+# Check status
+npx auraops status <deployment-id>
+
+# View logs
+npx auraops logs <deployment-id> --follow
 ```
 
-## 📁 Project Structure
+## CLI Commands
+
+| Command | What it does |
+|---------|-------------|
+| `auraops init [path]` | Parse manifest, detect framework, generate `.auraops/blueprint.json` |
+| `auraops deploy` | Send blueprint to API, deploy agent to GPU |
+| `auraops status <id>` | Query deployment status, uptime, GPU utilization |
+| `auraops logs <id>` | View deployment logs (`--follow` for streaming) |
+
+## API Endpoints
+
+| Method | Route | Purpose |
+|--------|-------|---------|
+| POST | `/api/v1/blueprint/generate` | Generate blueprint from manifest |
+| GET | `/api/v1/blueprint/:id` | Get blueprint details |
+| POST | `/api/v1/deploy` | Deploy agent to GPU |
+| GET | `/api/v1/deployment/:id` | Deployment status |
+| DELETE | `/api/v1/deployment/:id` | Terminate deployment |
+| GET | `/api/v1/agents` | List running agents |
+| GET | `/api/v1/weights` | List cached weights |
+| GET | `/api/v1/weights/:hash` | Weight details |
+| POST | `/api/v1/weights/pull` | Queue weight download |
+| GET | `/api/v1/weights/stats` | Cache statistics |
+
+## Project Structure
 
 ```
-auraops-backend/
-├── src/
-│   ├── services/
-│   │   ├── blueprinting/        # Phase 1: Manifest parsing + framework detection ✅
-│   │   ├── swr/                 # Phase 2: Weight caching ✅
-│   │   ├── deterministic/       # Phase 3: Reproducibility ✅
-│   │   ├── orchestration/       # Phase 4: GPU deployment ✅
-│   │   └── queue/               # Background jobs
-│   ├── api/
-│   │   ├── routes/              # API endpoints
-│   │   └── middleware/          # Express middleware
-│   ├── models/                  # Data models
-│   ├── types/                   # TypeScript type definitions
-│   ├── utils/                   # Utilities (logger, config, errors)
-│   ├── app.ts                   # Fastify app setup
-│   └── index.ts                 # Entry point
-├── tests/
-│   ├── integration/             # Integration tests
-│   └── __tests__/               # Unit tests
-├── tsconfig.json                # TypeScript config
-├── jest.config.js               # Jest config
-├── package.json
-└── README.md                    # This file
+src/
+├── cli/                    # CLI commands (init, deploy, status, logs)
+├── api/routes/             # Fastify REST API routes
+├── services/
+│   ├── blueprinting/       # Manifest parsing, framework detection, blueprint generation
+│   ├── swr/                # Redis cache, S3 storage, volume mounting
+│   ├── deterministic/      # Dependency locking, hash verification
+│   ├── orchestration/      # GPU orchestrator, providers, health checks
+│   └── queue/              # Background job queue (Bull)
+├── types/                  # TypeScript interfaces
+└── utils/                  # Logger, errors, config
 ```
 
-## 🏗️ Architecture
+## Requirements
 
-### Phase 1: Blueprinting Engine ✅ (Weeks 1-2)
-Parse Python manifests → Detect framework → Generate immutable blueprint spec
+- Node.js 18+
+- TypeScript 5+ (strict mode)
+- Redis (for weight cache + job queue)
+- AWS credentials (for S3 + EC2)
+- Lambda Labs API key (optional GPU provider)
 
-**Status**: ✅ 100% COMPLETE (7/7 tests passing)
-
-### Phase 2: Smart Weight Registry ✅ (Weeks 3-5)
-Cache model weights in Redis → Upload to S3 → Background pulling from HuggingFace
-
-**Status**: ✅ 100% COMPLETE (322/330 tests passing)
-
-### Phase 3: Deterministic Builder ✅ (Weeks 6-7)
-Lock dependencies → Generate SHA256 hashes → Pre-built Docker base images
-
-**Status**: ✅ 100% COMPLETE (139/139 tests passing)
-
-### Phase 4: GPU Orchestration ✅ (Weeks 8-11)
-Acquire GPU resources → Deploy agents → Health monitoring → Auto-recovery
-
-**Status**: ✅ 100% COMPLETE (504+ tests passing, MVP <30s achieved at 26.8s)
-
-### Phase 5: CLI & Polish 🔜 (Weeks 12-13)
-CLI commands (init, deploy, status, logs) → User documentation → Production hardening
-
-**Status**: 🔜 READY TO START
-
-### Phase 2: Smart Weight Registry (Weeks 3-5) ✅
-Cache model weights globally → Enable <30s deployments
-
-**API Endpoints**:
-- `GET /api/v1/weights` - List all cached weights
-- `GET /api/v1/weights/:hash` - Get weight details
-- `POST /api/v1/weights/pull` - Queue weight pull
-- `GET /api/v1/weights/stats` - Cache statistics
-
-### Phase 3: Deterministic Builder (Weeks 6-7) ✅
-Lock dependencies → Guarantee reproducibility
-
-**Components**:
-- DependencyLocking service (pip-compile integration)
-- HashVerifier service (SHA256 environment fingerprinting)
-- 3 production-ready Docker base images
-
-## 🧪 Testing
+## Development
 
 ```bash
-# Run all tests
-npm test
-
-# Run specific test file
-npm test -- frameworkDetector.test.ts
-
-# Run with coverage
-npm test -- --coverage
+npm run dev          # Start dev server
+npm test             # Run tests
+npm run type-check   # TypeScript strict mode check
+npm run build        # Compile to dist/
+npm run lint         # ESLint
 ```
 
-### Test Coverage Targets
-- Unit tests: 95%+ coverage
-- Integration tests: 100% of critical paths
-- E2E tests: Happy path + error scenarios
+## Tech Stack
 
-## 📊 Performance Targets
-
-| Operation | Target | Current |
-|-----------|--------|---------|
-| Manifest parsing | <100ms | TBD |
-| Framework detection | <50ms | TBD |
-| Blueprint generation | <1.0s | TBD |
-| Redis lookup | <1ms | TBD |
-| S3 upload (15GB) | <20s | TBD |
-| Deploy pipeline | <30s MVP | TBD |
-| Aspirational | <11s | TBD |
-
-## 🔧 Configuration
-
-Create a `.env` file (copy from `.env.example`):
-
-```env
-NODE_ENV=development
-PORT=3000
-MONGODB_URI=mongodb://localhost:27017
-REDIS_URL=redis://localhost:6379
-AWS_REGION=us-east-1
-LAMBDA_LABS_API_KEY=your-api-key
-```
-
-## 📚 API Endpoints
-
-### Blueprint Generation
-```bash
-curl -X POST http://localhost:3000/api/v1/blueprint/generate \
-  -H "Content-Type: application/json" \
-  -d '{"projectPath": "/path/to/project"}'
-```
-
-Response:
-```json
-{
-  "success": true,
-  "blueprint": {
-    "id": "uuid",
-    "framework": "pytorch",
-    "frameworkVersion": "2.1.0",
-    "baseImage": "aura-pytorch-2.1-cuda-12.1",
-    "cudaVersion": "12.1",
-    "pythonVersion": "3.11",
-    "dependencyCount": 42
-  },
-  "timing": {
-    "manifestParse": 45,
-    "frameworkDetect": 15,
-    "blueprintGenerate": 20,
-    "total": 80
-  }
-}
-```
-
-## 🎯 Development Roadmap
-
-**Week 1-2**: Phase 1 (Blueprinting) ✅  
-**Week 3-5**: Phase 2 (SWR) ✅  
-**Week 6-7**: Phase 3 (Deterministic) ✅  
-**Week 8-11**: Phase 4 (Orchestrator) ⏳  
-**Week 12-13**: Phase 5 (CLI & Polish) ⏳  
-
-## 🚀 Next Steps
-
-1. ✅ Project initialized
-2. ✅ Phase 1 core services built
-3. ⏳ Unit tests (all services)
-4. ⏳ API integration tests
-5. ⏳ CLI implementation
-6. ⏳ Docker base images
-7. ⏳ Phase 2-5 implementation
-
----
-
-**Status**: Phase 1 MVP (Core services implemented)  
-**Last Updated**: 2024-04-20
+- **Runtime**: Node.js + TypeScript (strict mode, zero `any` types)
+- **API**: Fastify
+- **Cache**: Redis
+- **Storage**: AWS S3
+- **Queue**: Bull (Redis-backed)
+- **GPU Providers**: Lambda Labs API, AWS EC2, Docker (local)
+- **Validation**: Zod
+- **Testing**: Jest
+- **Logging**: Pino

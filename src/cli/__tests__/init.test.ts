@@ -1,0 +1,152 @@
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import * as os from 'os';
+
+jest.mock('../../utils/logger', () => ({
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
+}));
+
+import { initCommand, runInit } from '../init';
+
+describe('CLI: auraops init', () => {
+  let tmpDir: string;
+  let stdoutSpy: jest.SpyInstance;
+  let stderrSpy: jest.SpyInstance;
+  let exitSpy: jest.SpyInstance;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auraops-test-'));
+    stdoutSpy = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+  });
+
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should parse pytorch project and generate blueprint', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'requirements.txt'),
+      'torch==2.1.0\ntransformers==4.30.0\nnumpy==1.24.0\n',
+    );
+
+    await initCommand.parseAsync(['node', 'auraops', tmpDir]);
+
+    const blueprintPath = path.join(tmpDir, '.auraops', 'blueprint.json');
+    const content = await fs.readFile(blueprintPath, 'utf-8');
+    const blueprint = JSON.parse(content);
+
+    expect(blueprint.id).toBeDefined();
+    expect(blueprint.framework.framework).toBe('transformers');
+    expect(blueprint.framework.cudaVersion).toBeDefined();
+    expect(blueprint.checksums.blueprintHash).toBeDefined();
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Manifest parsed'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Framework detected'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Blueprint generated'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Init complete'));
+  });
+
+  it('should parse langchain project as agentic', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'requirements.txt'),
+      'langchain==0.1.0\nlangchain-community==0.1.0\ntorch==2.1.0\n',
+    );
+
+    await initCommand.parseAsync(['node', 'auraops', tmpDir]);
+
+    const blueprintPath = path.join(tmpDir, '.auraops', 'blueprint.json');
+    const content = await fs.readFile(blueprintPath, 'utf-8');
+    const blueprint = JSON.parse(content);
+
+    expect(blueprint.framework.framework).toBe('langchain');
+    expect(blueprint.framework.primaryUse).toBe('agentic');
+  });
+
+  it('should respect custom output directory', async () => {
+    const customOutput = path.join(tmpDir, 'custom-output');
+    await fs.writeFile(
+      path.join(tmpDir, 'requirements.txt'),
+      'torch==2.1.0\n',
+    );
+
+    await initCommand.parseAsync(['node', 'auraops', tmpDir, '-o', customOutput]);
+
+    const blueprintPath = path.join(customOutput, 'blueprint.json');
+    const content = await fs.readFile(blueprintPath, 'utf-8');
+    const blueprint = JSON.parse(content);
+    expect(blueprint.id).toBeDefined();
+  });
+
+  it('should fail when project path does not exist', async () => {
+    await initCommand.parseAsync(['node', 'auraops', '/nonexistent/path']);
+
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('not found'));
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('should fail when no manifest file found', async () => {
+    await initCommand.parseAsync(['node', 'auraops', tmpDir]);
+
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('No recognized manifest'));
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('should handle pyproject.toml manifests', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'pyproject.toml'),
+      `[tool.poetry.dependencies]
+torch = "2.1.0"
+numpy = "1.24.0"
+`,
+    );
+
+    await runInit(tmpDir, {});
+
+    const blueprintPath = path.join(tmpDir, '.auraops', 'blueprint.json');
+    const content = await fs.readFile(blueprintPath, 'utf-8');
+    const blueprint = JSON.parse(content);
+    expect(blueprint.id).toBeDefined();
+  });
+
+  it('should display dependency count in output', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'requirements.txt'),
+      'torch==2.1.0\nnumpy==1.24.0\npandas==2.0.0\n',
+    );
+
+    await initCommand.parseAsync(['node', 'auraops', tmpDir]);
+
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('3 dependencies'));
+  });
+
+  it('should show framework details in output', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'requirements.txt'),
+      'torch==2.1.0\n',
+    );
+
+    await initCommand.parseAsync(['node', 'auraops', tmpDir]);
+
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Framework'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Python'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('CUDA'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Base Image'));
+  });
+
+  it('should work when given explicit current directory path', async () => {
+    await fs.writeFile(path.join(tmpDir, 'requirements.txt'), 'torch==2.1.0\n');
+
+    await runInit(tmpDir, {});
+
+    const blueprintPath = path.join(tmpDir, '.auraops', 'blueprint.json');
+    const exists = await fs.access(blueprintPath).then(() => true).catch(() => false);
+    expect(exists).toBe(true);
+  });
+});

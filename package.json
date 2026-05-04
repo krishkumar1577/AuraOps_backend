@@ -3,6 +3,9 @@
   "version": "1.0.0-alpha",
   "description": "Infrastructure as Invisible Code - Deterministic deployment layer for AI agents",
   "main": "dist/index.js",
+  "bin": {
+    "auraops": "dist/cli/index.js"
+  },
   "scripts": {
     "dev": "ts-node src/index.ts",
     "build": "tsc",
@@ -30,6 +33,7 @@
     "@fastify/jwt": "^7.0.0",
     "axios": "^1.6.0",
     "bull": "^4.11.0",
+    "commander": "^12.1.0",
     "dotenv": "^16.3.0",
     "fastify": "^4.24.0",
     "mongodb": "^6.0.0",
