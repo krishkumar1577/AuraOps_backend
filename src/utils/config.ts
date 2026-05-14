@@ -6,11 +6,11 @@ dotenv.config();
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
-  API_URL: z.string().url().default('http://localhost:3000'),
+  API_URL: z.string().default('http://localhost:3000'),
   JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
   MONGODB_URI: z.string().min(1).default('mongodb://localhost:27017'),
   MONGODB_DB: z.string().min(1).default('auraops'),
-  REDIS_URL: z.string().url().default('redis://localhost:6379'),
+  REDIS_URL: z.string().default('redis://localhost:6379'),
   AWS_REGION: z.string().min(1).default('us-east-1'),
   AWS_ACCESS_KEY_ID: z.string().default(''),
   AWS_SECRET_ACCESS_KEY: z.string().default(''),
