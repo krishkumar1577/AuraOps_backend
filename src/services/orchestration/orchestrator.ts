@@ -52,7 +52,7 @@ interface StoredDeployment {
   error?: string;
 }
 
-interface RedisClient {
+export interface RedisClient {
   isOpen: boolean;
   connect(): Promise<void>;
   get(key: string): Promise<string | null>;

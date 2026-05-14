@@ -3,13 +3,13 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import axios from 'axios';
 import type { BlueprintJSON } from '../types/blueprint.types';
-import { config } from '../utils/config';
 import * as ui from './utils';
 
 interface DeployOptions {
   blueprint?: string;
   provider?: string;
   gpu?: string;
+  token?: string;
 }
 
 async function loadBlueprint(blueprintPath: string): Promise<BlueprintJSON> {
@@ -37,7 +37,8 @@ async function runDeploy(options: DeployOptions): Promise<void> {
   const blueprint = await loadBlueprint(blueprintPath);
   ui.step('Blueprint validated', ui.formatMs(Date.now() - validateStart));
 
-  const apiUrl = config.api_url;
+  const apiUrl = ui.resolveApiUrl();
+  const headers = ui.getAuthHeaders(options.token);
 
   const syncStart = Date.now();
   ui.info('Syncing agent logic...');
@@ -64,6 +65,7 @@ async function runDeploy(options: DeployOptions): Promise<void> {
   try {
     const response = await axios.post(`${apiUrl}/api/v1/deploy`, deployPayload, {
       timeout: 60000,
+      headers,
     });
     deployResult = response.data as typeof deployResult;
   } catch (error: unknown) {
@@ -108,6 +110,7 @@ export const deployCommand = new Command('deploy')
   .option('-b, --blueprint <path>', 'Path to blueprint.json (default: .auraops/blueprint.json)')
   .option('-p, --provider <name>', 'GPU provider (lambdalabs, aws, local)', 'local')
   .option('-g, --gpu <type>', 'GPU type (e.g. a100, h100, rtx4090)')
+  .option('--token <jwt>', 'API authentication token (or set AURAOPS_API_TOKEN)')
   .action(async (options: DeployOptions) => {
     try {
       await runDeploy(options);

@@ -1,6 +1,5 @@
 import { Command } from 'commander';
 import axios from 'axios';
-import { config } from '../utils/config';
 import * as ui from './utils';
 
 interface LogEntry {
@@ -26,11 +25,11 @@ function formatLogLine(entry: LogEntry): string {
   return `\x1b[2m[${entry.timestamp}]\x1b[0m ${color}${entry.level.toUpperCase().padEnd(5)}\x1b[0m ${entry.message}`;
 }
 
-async function fetchLogs(apiUrl: string, deploymentId: string): Promise<LogEntry[]> {
+async function fetchLogs(apiUrl: string, deploymentId: string, headers: Record<string, string>): Promise<LogEntry[]> {
   try {
     const response = await axios.get(
       `${apiUrl}/api/v1/deployment/${deploymentId}/logs`,
-      { timeout: 10000 },
+      { timeout: 10000, headers },
     );
     const data = response.data as LogsResponse;
     return data.logs || [];
@@ -47,12 +46,13 @@ async function fetchLogs(apiUrl: string, deploymentId: string): Promise<LogEntry
   }
 }
 
-async function runLogs(deploymentId: string, options: { follow: boolean; tail?: string }): Promise<void> {
-  const apiUrl = config.api_url;
+async function runLogs(deploymentId: string, options: { follow: boolean; tail?: string; token?: string }): Promise<void> {
+  const apiUrl = ui.resolveApiUrl();
+  const headers = ui.getAuthHeaders(options.token);
   const tailCount = options.tail ? parseInt(options.tail, 10) : undefined;
 
   if (!options.follow) {
-    let logs = await fetchLogs(apiUrl, deploymentId);
+    let logs = await fetchLogs(apiUrl, deploymentId, headers);
 
     if (logs.length === 0) {
       ui.info(`No logs available for deployment ${deploymentId}`);
@@ -80,7 +80,7 @@ async function runLogs(deploymentId: string, options: { follow: boolean; tail?: 
     // eslint-disable-next-line no-constant-condition
     while (true) {
       try {
-        const logs = await fetchLogs(apiUrl, deploymentId);
+        const logs = await fetchLogs(apiUrl, deploymentId, headers);
         const newLogs = lastTimestamp
           ? logs.filter(l => l.timestamp > lastTimestamp)
           : logs;
@@ -114,7 +114,8 @@ export const logsCommand = new Command('logs')
   .argument('<deploymentId>', 'Deployment ID')
   .option('-f, --follow', 'Follow log output', false)
   .option('-t, --tail <lines>', 'Number of lines to show from end')
-  .action(async (deploymentId: string, options: { follow: boolean; tail?: string }) => {
+  .option('--token <jwt>', 'API authentication token (or set AURAOPS_API_TOKEN)')
+  .action(async (deploymentId: string, options: { follow: boolean; tail?: string; token?: string }) => {
     try {
       await runLogs(deploymentId, options);
     } catch (error: unknown) {

@@ -4,6 +4,7 @@ export type {
   WorkerRequirements,
   WorkerInfo,
   DeploymentStatus,
+  RedisClient,
 } from './orchestrator';
 
 export { HealthCheck } from './healthCheck';

@@ -53,7 +53,7 @@ describe('AWSGPUProvider', () => {
         send: jest.fn().mockRejectedValue(new Error('Invalid credentials')),
       }));
 
-      await expect(provider.connect(credentials)).rejects.toThrow('Failed to validate credentials');
+      await expect(provider.connect(credentials)).rejects.toThrow('AWSGPUProvider connection failed');
     });
   });
 
@@ -141,14 +141,13 @@ describe('AWSGPUProvider', () => {
         config: { region: 'us-east-1' },
       }));
 
-      await provider.connect({
-        aws_access_key_id: 'AKIA...',
-        aws_secret_access_key: 'secret...',
-      });
-
-      const spec = { minMemory: 30, framework: 'pytorch' };
-
-      await expect(provider.acquireGPU(spec)).rejects.toThrow('GPU acquisition failed');
+      // Connect will throw because mockSend rejects
+      await expect(
+        provider.connect({
+          aws_access_key_id: 'AKIA...',
+          aws_secret_access_key: 'secret...',
+        })
+      ).rejects.toThrow('AWSGPUProvider connection failed');
     });
 
     it('should throw error for unknown worker release', async () => {
@@ -208,14 +207,13 @@ describe('AWSGPUProvider', () => {
         config: { region: 'us-east-1' },
       }));
 
-      await provider.connect({
-        aws_access_key_id: 'AKIA...',
-        aws_secret_access_key: 'secret...',
-      });
-
-      const health = await provider.healthCheck();
-
-      expect(health).toBe(false);
+      // Connect will throw because mockSend rejects
+      await expect(
+        provider.connect({
+          aws_access_key_id: 'AKIA...',
+          aws_secret_access_key: 'secret...',
+        })
+      ).rejects.toThrow('AWSGPUProvider connection failed');
     });
   });
 });

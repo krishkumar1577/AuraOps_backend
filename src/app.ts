@@ -1,16 +1,58 @@
 import Fastify, { FastifyInstance } from 'fastify';
+import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
 import { blueprintRoutes } from './api/routes/blueprint.routes';
+import deploymentRoutes from './api/routes/deployment.routes';
 import { registerSWRRoutes } from './api/routes/swr.routes';
+import { authRoutes } from './api/routes/auth.routes';
+import { createDefaultOrchestrator } from './services/orchestration/defaultOrchestrator';
+import authPlugin from './plugins/auth';
 import { logger } from './utils/logger';
 import config from './utils/config';
 
 export async function createApp(): Promise<FastifyInstance> {
   const fastify = Fastify({
     logger: true,
+    bodyLimit: config.max_request_body_bytes,
+    trustProxy: true,
   });
 
+  await fastify.register(helmet, { global: true });
+  await fastify.register(cors, {
+    origin: config.isProd
+      ? (config.cors_origin || 'https://auraops.dev')
+      : true,
+    credentials: true,
+  });
+  await fastify.register(rateLimit, {
+    max: 100,
+    timeWindow: '1 minute',
+  });
+
+  await fastify.register(authPlugin);
+
+  fastify.addHook('onRequest', async (request) => {
+    const isPublicRoute =
+      request.url === '/' ||
+      request.url === '/health' ||
+      request.url.startsWith('/api/v1/auth/');
+    if (isPublicRoute) {
+      return;
+    }
+
+    if (request.url.startsWith('/api/v1')) {
+      await request.jwtVerify();
+    }
+  });
+
+  fastify.register(authRoutes);
   fastify.register(blueprintRoutes);
   fastify.register(registerSWRRoutes);
+  const orchestrator = createDefaultOrchestrator(config.redis_url);
+  fastify.register(async (instance) => {
+    await deploymentRoutes(instance, orchestrator);
+  });
 
   fastify.get('/health', async () => {
     return { status: 'healthy', timestamp: new Date().toISOString() };
@@ -23,6 +65,8 @@ export async function createApp(): Promise<FastifyInstance> {
       status: 'running',
       endpoints: {
         health: '/health',
+        register: 'POST /api/v1/auth/register',
+        login: 'POST /api/v1/auth/login',
         blueprintGenerate: 'POST /api/v1/blueprint/generate',
         blueprintGet: 'GET /api/v1/blueprint/:blueprintId',
         weightsListAll: 'GET /api/v1/weights',
@@ -34,16 +78,15 @@ export async function createApp(): Promise<FastifyInstance> {
   });
 
   fastify.setErrorHandler((error, request, reply) => {
-    const err = error as any;
     logger.error({
-      err,
+      err: error,
       url: request.url,
       method: request.method,
     });
 
-    reply.code(err?.statusCode || 500).send({
+    reply.code(error.statusCode ?? 500).send({
       success: false,
-      error: err?.message || 'Internal server error',
+      error: error.message || 'Internal server error',
     });
   });
 
@@ -57,8 +100,7 @@ export async function startServer() {
     await fastify.listen({ port: config.port, host: '0.0.0.0' });
     logger.info(`✓ Server running on http://0.0.0.0:${config.port}`);
   } catch (err) {
-    const error = err as any;
-    logger.error('Server startup error:', error);
+    logger.error(`Server startup error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 }

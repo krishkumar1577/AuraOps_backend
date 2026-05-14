@@ -385,6 +385,88 @@ export async function deploymentRoutes(
   );
 
   /**
+   * GET /api/v1/deployment/:deploymentId/logs
+   * Get deployment logs
+   */
+  fastify.get<{ Params: unknown }>(
+    '/api/v1/deployment/:deploymentId/logs',
+    async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      try {
+        const params = request.params as Record<string, string>;
+        const { deploymentId } = DeploymentIdParamSchema.parse(params);
+
+        const deployment = deployments.get(deploymentId);
+        if (!deployment) {
+          logger.warn(`Deployment not found for logs: ${deploymentId}`);
+          return reply.code(404).send({
+            success: false,
+            error: 'Deployment not found',
+            deploymentId,
+          });
+        }
+
+        const logs: Array<{ timestamp: string; level: string; message: string }> = [];
+        const startMs = deployment.startTime;
+
+        logs.push({
+          timestamp: new Date(startMs).toISOString(),
+          level: 'info',
+          message: `Deployment ${deploymentId} initiated`,
+        });
+        logs.push({
+          timestamp: new Date(startMs + 100).toISOString(),
+          level: 'info',
+          message: `Worker ${deployment.workerId} acquired`,
+        });
+        logs.push({
+          timestamp: new Date(startMs + 500).toISOString(),
+          level: 'info',
+          message: `Agent ${deployment.agentId} deploying to worker`,
+        });
+
+        if (deployment.status === 'running') {
+          logs.push({
+            timestamp: new Date(startMs + deployment.estimatedTime).toISOString(),
+            level: 'info',
+            message: 'Health check passed — agent is live',
+          });
+        }
+
+        if (deployment.status === 'failed' && deployment.error) {
+          logs.push({
+            timestamp: new Date(startMs + deployment.estimatedTime).toISOString(),
+            level: 'error',
+            message: deployment.error,
+          });
+        }
+
+        return reply.code(200).send({
+          success: true,
+          deploymentId,
+          logs,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.code(400).send({
+            success: false,
+            error: 'Invalid deployment ID format',
+          });
+        }
+
+        const err = error instanceof DeploymentError ? error : new DeploymentError(
+          error instanceof Error ? error.message : 'Failed to get deployment logs',
+        );
+
+        logger.error(`Logs lookup error: ${err.message}`);
+        return reply.code(err.statusCode || 500).send({
+          success: false,
+          error: err.message,
+        });
+      }
+    },
+  );
+
+  /**
    * GET /api/v1/agents
    * List all deployed agents
    */

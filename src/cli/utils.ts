@@ -1,4 +1,5 @@
 import { AuraOpsError } from '../utils/errors';
+import { config } from '../utils/config';
 
 const COLORS = {
   reset: '\x1b[0m',
@@ -64,6 +65,21 @@ export function formatUptime(ms: number): string {
   if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m`;
+}
+
+export function getAuthHeaders(token?: string): Record<string, string> {
+  const resolved = token || process.env.AURAOPS_API_TOKEN || '';
+  if (!resolved) {
+    warn(
+      'No API token provided. Set AURAOPS_API_TOKEN or pass --token. Server will reject requests.',
+    );
+    return {};
+  }
+  return { Authorization: `Bearer ${resolved}` };
+}
+
+export function resolveApiUrl(): string {
+  return process.env.AURAOPS_API_URL || config.api_url;
 }
 
 export function handleError(error: unknown): never {

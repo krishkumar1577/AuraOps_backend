@@ -44,3 +44,17 @@ export class DeploymentError extends AuraOpsError {
     this.name = 'DeploymentError';
   }
 }
+
+export class AuthenticationError extends AuraOpsError {
+  constructor(message: string = 'Invalid credentials') {
+    super('AUTHENTICATION_ERROR', message, 401);
+    this.name = 'AuthenticationError';
+  }
+}
+
+export class ConflictError extends AuraOpsError {
+  constructor(message: string) {
+    super('CONFLICT', message, 409);
+    this.name = 'ConflictError';
+  }
+}

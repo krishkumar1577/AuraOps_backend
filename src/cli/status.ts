@@ -1,6 +1,5 @@
 import { Command } from 'commander';
 import axios from 'axios';
-import { config } from '../utils/config';
 import * as ui from './utils';
 
 interface StatusResult {
@@ -15,8 +14,9 @@ interface StatusResult {
   error?: string;
 }
 
-async function runStatus(deploymentId: string): Promise<void> {
-  const apiUrl = config.api_url;
+async function runStatus(deploymentId: string, options: { token?: string }): Promise<void> {
+  const apiUrl = ui.resolveApiUrl();
+  const headers = ui.getAuthHeaders(options.token);
 
   ui.header('AuraOps Status');
   ui.blank();
@@ -25,7 +25,7 @@ async function runStatus(deploymentId: string): Promise<void> {
   try {
     const response = await axios.get(
       `${apiUrl}/api/v1/deployment/${deploymentId}`,
-      { timeout: 10000 },
+      { timeout: 10000, headers },
     );
     result = response.data as StatusResult;
   } catch (error: unknown) {
@@ -75,9 +75,10 @@ async function runStatus(deploymentId: string): Promise<void> {
 export const statusCommand = new Command('status')
   .description('Check deployment status')
   .argument('<deploymentId>', 'Deployment ID to check')
-  .action(async (deploymentId: string) => {
+  .option('--token <jwt>', 'API authentication token (or set AURAOPS_API_TOKEN)')
+  .action(async (deploymentId: string, options: { token?: string }) => {
     try {
-      await runStatus(deploymentId);
+      await runStatus(deploymentId, options);
     } catch (error: unknown) {
       ui.handleError(error);
     }
