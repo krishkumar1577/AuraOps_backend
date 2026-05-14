@@ -82,10 +82,7 @@ export async function registerSWRRoutes(
     logger.info(`✓ SWR routes initialized (${Date.now() - initStart}ms)`);
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error);
-    logger.error(`SWR routes initialization failed: ${err}`);
-    throw new DeploymentError('Failed to initialize SWR routes', {
-      cause: err,
-    });
+    logger.warn(`SWR routes initialized without job queue (Phase 2): ${err}`);
   }
 
   /**
