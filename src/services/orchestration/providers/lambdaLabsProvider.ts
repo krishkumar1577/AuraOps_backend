@@ -140,6 +140,7 @@ export class LambdaLabsProvider extends BaseGPUProvider {
         memoryGB: instance.instance_type.gpu_memory_gb,
         framework: spec.framework,
         status: 'ready',
+        secureRuntimeActive: false,
       };
     } catch (error) {
       if (error instanceof DeploymentError) throw error;

@@ -24,6 +24,7 @@ class StaticGPUProvider implements GPUProvider {
       gpuMemoryGB: Math.max(16, requirements.minGPUMemory),
       availableGPUMemory: Math.max(16, requirements.minGPUMemory),
       provider: this.name,
+      secureRuntimeActive: false,
     };
   }
 
@@ -60,6 +61,7 @@ class ModalGPUProviderAdapter implements GPUProvider {
       const worker = await this.modal.acquireGPU({
         minMemory: requirements.minGPUMemory,
         framework: requirements.framework,
+        secureRuntime: requirements.secureRuntime,
       });
 
       return {
@@ -70,6 +72,7 @@ class ModalGPUProviderAdapter implements GPUProvider {
         gpuMemoryGB: worker.memoryGB,
         availableGPUMemory: worker.memoryGB,
         provider: this.name,
+        secureRuntimeActive: worker.secureRuntimeActive,
       };
     } catch (error) {
       logger.error(`Modal worker acquisition failed: ${error instanceof Error ? error.message : String(error)}`);

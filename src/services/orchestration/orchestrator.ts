@@ -20,6 +20,7 @@ export interface WorkerRequirements {
   minGPUMemory: number;
   framework: string;
   pythonVersion: string;
+  secureRuntime?: boolean;
 }
 
 export interface WorkerInfo {
@@ -30,6 +31,7 @@ export interface WorkerInfo {
   gpuMemoryGB: number;
   availableGPUMemory: number;
   provider: string;
+  secureRuntimeActive: boolean;
 }
 
 export interface DeploymentStatus {
@@ -39,6 +41,7 @@ export interface DeploymentStatus {
   startTime: number;
   containerImage: string;
   gpuUtilization: number;
+  lastActivityAt: number;
   error?: string;
 }
 
@@ -49,6 +52,7 @@ interface StoredDeployment {
   startTime: number;
   containerImage: string;
   gpuUtilization: number;
+  lastActivityAt: number;
   error?: string;
 }
 
@@ -188,6 +192,7 @@ export class Orchestrator {
         workerId,
         status: 'pending',
         startTime: Date.now(),
+        lastActivityAt: Date.now(),
         containerImage: `${blueprint.systemRequirements.baseImageId}:${blueprint.systemRequirements.baseImageTag}`,
         gpuUtilization: 0,
       };
@@ -204,6 +209,7 @@ export class Orchestrator {
       if (Date.now() > deployTimeout) {
         deployment.status = 'failed';
         deployment.error = 'Deployment exceeded timeout';
+        deployment.lastActivityAt = Date.now();
         await this.redisClient.set(deploymentKey, JSON.stringify(deployment), {
           EX: 86400,
         });
@@ -212,6 +218,7 @@ export class Orchestrator {
 
       // Update to deploying
       deployment.status = 'deploying';
+      deployment.lastActivityAt = Date.now();
       await this.redisClient.set(deploymentKey, JSON.stringify(deployment), {
         EX: 86400,
       });
@@ -243,6 +250,7 @@ export class Orchestrator {
       if (!healthCheckPassed) {
         deployment.status = 'failed';
         deployment.error = lastHealthCheckError || 'Health check failed';
+        deployment.lastActivityAt = Date.now();
         await this.redisClient.set(deploymentKey, JSON.stringify(deployment), {
           EX: 86400,
         });
@@ -256,6 +264,7 @@ export class Orchestrator {
       // Update to running
       deployment.status = 'running';
       deployment.gpuUtilization = 85; // Simulated initial utilization
+      deployment.lastActivityAt = Date.now();
       await this.redisClient.set(deploymentKey, JSON.stringify(deployment), {
         EX: 86400,
       });
@@ -278,10 +287,12 @@ export class Orchestrator {
           workerId,
           status: 'failed' as const,
           startTime: Date.now(),
+          lastActivityAt: Date.now(),
           containerImage: blueprint.systemRequirements?.baseImageId || 'unknown',
           gpuUtilization: 0,
         };
         deployment.status = 'failed';
+        deployment.lastActivityAt = Date.now();
         deployment.error = error instanceof Error ? error.message : String(error);
         await this.redisClient.set(deploymentKey, JSON.stringify(deployment), {
           EX: 86400,
@@ -310,9 +321,66 @@ export class Orchestrator {
       }
 
       const deployment = JSON.parse(payload) as StoredDeployment;
+      
+      // Update last activity on every status check (Simulating Scale-to-Zero activity)
+      deployment.lastActivityAt = Date.now();
+      await this.redisClient.set(deploymentKey, JSON.stringify(deployment), {
+        EX: 86400,
+      });
+
       return deployment;
     } catch (error: unknown) {
       throw this.toDeploymentError('Failed to get deployment status', { agentId }, error);
+    }
+  }
+
+  async terminateAgent(agentId: string): Promise<void> {
+    try {
+      await this.ensureConnected();
+      logger.info(`Terminating agent: ${agentId}`);
+
+      const status = await this.getDeploymentStatus(agentId);
+      await this.releaseWorker(status.workerId);
+
+      await this.redisClient.del(this.deploymentKey(agentId));
+      await this.redisClient.sRem(ACTIVE_DEPLOYMENTS_KEY, agentId);
+
+      logger.info(`✓ Agent terminated: ${agentId}`);
+    } catch (error: unknown) {
+      throw this.toDeploymentError('Failed to terminate agent', { agentId }, error);
+    }
+  }
+
+  async cleanupIdleDeployments(idleThresholdMs: number): Promise<number> {
+    const start = Date.now();
+    let terminatedCount = 0;
+
+    try {
+      await this.ensureConnected();
+      const agentIds = await this.redisClient.sMembers(ACTIVE_DEPLOYMENTS_KEY);
+      
+      for (const agentId of agentIds) {
+        try {
+          const status = await this.getDeploymentStatus(agentId);
+          const idleTime = Date.now() - status.lastActivityAt;
+
+          if (idleTime > idleThresholdMs) {
+            logger.info(`Scale-to-Zero: Terminating idle agent ${agentId} (Idle for ${Math.round(idleTime / 1000)}s)`);
+            await this.terminateAgent(agentId);
+            terminatedCount++;
+          }
+        } catch (error) {
+          logger.error(`Failed to cleanup agent ${agentId}:`, error);
+        }
+      }
+
+      if (terminatedCount > 0) {
+        logger.info(`✓ Scale-to-Zero: Terminated ${terminatedCount} idle agents in ${Date.now() - start}ms`);
+      }
+      return terminatedCount;
+    } catch (error: unknown) {
+      logger.error('Failed to run idle cleanup:', error);
+      return 0;
     }
   }
 

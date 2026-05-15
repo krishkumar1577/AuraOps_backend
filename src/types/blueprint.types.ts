@@ -6,6 +6,7 @@ export interface ParsedManifest {
   cudaVersion?: string;
   torchVersion?: string;
   langchainVersion?: string;
+  systemDependencies?: string[];
   customModels?: Array<{
     name: string;
     path: string;
@@ -33,6 +34,7 @@ export interface BlueprintJSON {
     cuDNNVersion: string;
     baseImageId: string;
     baseImageTag: string;
+    systemPackages: string[];
   };
   customModels: Array<{
     name: string;

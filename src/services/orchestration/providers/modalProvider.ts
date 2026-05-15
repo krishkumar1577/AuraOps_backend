@@ -119,6 +119,7 @@ export class ModalProvider extends BaseGPUProvider {
         memoryGB,
         framework: spec.framework,
         status: 'ready',
+        secureRuntimeActive: false,
       };
     } catch (error) {
       if (error instanceof DeploymentError) throw error;

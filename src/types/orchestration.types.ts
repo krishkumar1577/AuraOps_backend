@@ -16,6 +16,7 @@ export interface WorkerInstance {
   memoryGB: number;
   framework: string;
   status: 'provisioning' | 'ready' | 'deployed';
+  secureRuntimeActive: boolean;
 }
 
 export interface GPUAcquisitionSpec {
@@ -23,6 +24,7 @@ export interface GPUAcquisitionSpec {
   framework: string;
   region?: string;
   maxWaitSeconds?: number;
+  secureRuntime?: boolean;
 }
 
 export interface GPUProvider {

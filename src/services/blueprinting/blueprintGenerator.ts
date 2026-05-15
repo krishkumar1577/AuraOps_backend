@@ -22,6 +22,7 @@ export class BlueprintGenerator {
         cuDNNVersion: this.mapCudaToCuDNN(fingerprint.cudaVersion),
         baseImageId: baseImage.id,
         baseImageTag: baseImage.tag,
+        systemPackages: manifest.systemDependencies || [],
       },
       customModels: [],
       deploymentConfig: {

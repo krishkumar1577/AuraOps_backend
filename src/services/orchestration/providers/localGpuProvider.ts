@@ -15,6 +15,7 @@ export class LocalGPUProvider extends BaseGPUProvider {
   name = 'LocalGPUProvider';
   private localGPUs: Map<number, LocalGPU> = new Map();
   private reservations: Map<string, number> = new Map();
+  private isGVisorAvailable: boolean = false;
 
   async validateConnection(): Promise<void> {
     const start = Date.now();
@@ -26,19 +27,29 @@ export class LocalGPUProvider extends BaseGPUProvider {
       });
 
       this.parseNvidiaSmiOutput(output);
+      this.checkGVisorAvailability();
 
       if (this.localGPUs.size === 0) {
         throw new DeploymentError('LocalGPUProvider: No GPU detected via nvidia-smi');
       }
 
       logger.info(
-        `✓ LocalGPUProvider initialized with ${this.localGPUs.size} GPU(s) in ${Date.now() - start}ms`,
+        `✓ LocalGPUProvider initialized with ${this.localGPUs.size} GPU(s) (gVisor: ${this.isGVisorAvailable}) in ${Date.now() - start}ms`,
       );
     } catch (error) {
       if (error instanceof DeploymentError) throw error;
       throw new DeploymentError('LocalGPUProvider: nvidia-smi not available or failed', {
         cause: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  private checkGVisorAvailability(): void {
+    try {
+      execSync('runsc --version', { stdio: 'ignore' });
+      this.isGVisorAvailable = true;
+    } catch {
+      this.isGVisorAvailable = false;
     }
   }
 
@@ -67,6 +78,10 @@ export class LocalGPUProvider extends BaseGPUProvider {
     this.requireConnection();
     this.validateGPUSpec(spec);
 
+    if (spec.secureRuntime && !this.isGVisorAvailable) {
+      throw new DeploymentError('LocalGPUProvider: gVisor (runsc) runtime requested but not available on this host');
+    }
+
     try {
       const matching = Array.from(this.localGPUs.values()).find(
         (gpu) => gpu.available && (gpu.memoryMB / 1024) >= spec.minMemory,
@@ -82,7 +97,7 @@ export class LocalGPUProvider extends BaseGPUProvider {
       const workerId = this.generateWorkerId();
       this.reservations.set(workerId, matching.id);
 
-      logger.info(`✓ Local GPU ${matching.id} acquired in ${Date.now() - start}ms`);
+      logger.info(`✓ Local GPU ${matching.id} acquired in ${Date.now() - start}ms (Secure: ${spec.secureRuntime || false})`);
 
       return {
         workerId,
@@ -93,6 +108,7 @@ export class LocalGPUProvider extends BaseGPUProvider {
         memoryGB: Math.round(matching.memoryMB / 1024),
         framework: spec.framework,
         status: 'ready',
+        secureRuntimeActive: spec.secureRuntime && this.isGVisorAvailable ? true : false,
       };
     } catch (error) {
       if (error instanceof DeploymentError) throw error;
