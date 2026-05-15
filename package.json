@@ -1,11 +1,24 @@
 {
-  "name": "auraops-backend",
-  "version": "1.0.0-alpha",
-  "description": "Infrastructure as Invisible Code - Deterministic deployment layer for AI agents",
+  "name": "auraops",
+  "version": "0.1.0",
+  "description": "Deploy AI agents to GPU in seconds",
   "main": "dist/index.js",
   "bin": {
     "auraops": "dist/cli/index.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/krishkumar1577/AuraOps_backend"
+  },
+  "homepage": "https://github.com/krishkumar1577/AuraOps_backend#readme",
+  "bugs": {
+    "url": "https://github.com/krishkumar1577/AuraOps_backend/issues"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "ts-node src/index.ts",
     "build": "tsc",
@@ -19,11 +32,13 @@
     "auraops",
     "ai",
     "deployment",
+    "gpu",
     "orchestration",
-    "gpu"
+    "modal",
+    "cli"
   ],
-  "author": "AuraOps Team",
-  "license": "ISC",
+  "author": "Krish",
+  "license": "Apache-2.0",
   "dependencies": {
     "@aws-sdk/client-ec2": "^3.1038.0",
     "@aws-sdk/client-lambda": "^3.0.0",

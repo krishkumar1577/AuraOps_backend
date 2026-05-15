@@ -1,5 +1,4 @@
 import { AuraOpsError } from '../utils/errors';
-import { config } from '../utils/config';
 
 const COLORS = {
   reset: '\x1b[0m',
@@ -78,8 +77,10 @@ export function getAuthHeaders(token?: string): Record<string, string> {
   return { Authorization: `Bearer ${resolved}` };
 }
 
+const DEFAULT_API_URL = 'https://auraops-backend-production.up.railway.app';
+
 export function resolveApiUrl(): string {
-  return process.env.AURAOPS_API_URL || config.api_url;
+  return process.env.AURAOPS_API_URL || DEFAULT_API_URL;
 }
 
 export function handleError(error: unknown): never {

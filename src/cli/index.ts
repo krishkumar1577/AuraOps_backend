@@ -10,8 +10,8 @@ const program = new Command();
 
 program
   .name('auraops')
-  .description('AuraOps - Deterministic AI agent deployment in seconds')
-  .version('1.0.0-alpha');
+  .description('Deploy AI agents to GPU in seconds')
+  .version('0.1.0');
 
 program.addCommand(initCommand);
 program.addCommand(deployCommand);
