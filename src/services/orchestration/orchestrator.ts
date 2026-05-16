@@ -5,7 +5,7 @@ import type { BlueprintJSON } from '../../types/blueprint.types';
 
 const DEPLOYMENT_STATE_PREFIX = 'orchestration:deployment:';
 const ACTIVE_DEPLOYMENTS_KEY = 'orchestration:active-deployments';
-const HEALTH_CHECK_TIMEOUT_MS = 5000;
+const HEALTH_CHECK_TIMEOUT_MS = 60000;
 const DEPLOYMENT_TIMEOUT_MS = 300000;
 const WORKER_ACQUISITION_TIMEOUT_MS = 60000;
 
