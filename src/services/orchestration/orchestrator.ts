@@ -422,7 +422,11 @@ export class Orchestrator {
     try {
       await this.redisClient.connect();
     } catch (error: unknown) {
-      throw this.toDeploymentError('Redis connection failed', {}, error);
+      const msg = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : '';
+      logger.error(`CRITICAL: Redis Connection Failed. URL: ${this.redisClient.isOpen ? 'OPEN' : 'CLOSED'}. Error: ${msg}`);
+      if (stack) logger.error(stack);
+      throw this.toDeploymentError('Redis connection failed', { cause: msg }, error);
     }
   }
 
