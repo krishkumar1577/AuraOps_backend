@@ -95,6 +95,7 @@ class ModalGPUProviderAdapter implements GPUProvider {
 
 export function createDefaultOrchestrator(redisUrl: string): Orchestrator {
   const redisClient = createClient({ url: redisUrl });
+  logger.info(`Initializing Orchestrator with Redis: ${redisUrl.substring(0, 15)}...`);
   const providers: GPUProvider[] = [];
 
   if (config.modal_token_id && config.modal_token_secret) {
