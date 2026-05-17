@@ -85,6 +85,9 @@ async function runDeploy(options: DeployOptions): Promise<void> {
     agentId: string;
     status: string;
     estimatedTime: number;
+    endpoint_url?: string;
+    endpoint_status?: string;
+    modal_deployment_error?: string;
   };
 
   try {
@@ -107,6 +110,35 @@ async function runDeploy(options: DeployOptions): Promise<void> {
     throw error;
   }
 
+  if (!deployResult.endpoint_url) {
+    ui.info('Waiting for live endpoint...');
+
+    for (let i = 0; i < 10; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
+      const statusRes = await axios.get(
+        `${apiUrl}/api/v1/deployment/${deployResult.deploymentId}`,
+        { headers },
+      );
+      const statusData = statusRes.data as {
+        endpointUrl?: string;
+        endpoint_url?: string;
+        endpoint_status?: string;
+        modal_deployment_error?: string;
+      };
+
+      if (statusData.endpointUrl || statusData.endpoint_url) {
+        deployResult.endpoint_url = statusData.endpointUrl ?? statusData.endpoint_url;
+        break;
+      }
+
+      if (statusData.endpoint_status === 'failed') {
+        ui.warn(`Modal endpoint failed: ${statusData.modal_deployment_error}`);
+        break;
+      }
+    }
+  }
+
   ui.step('Logic synced', ui.formatMs(Date.now() - syncStart));
 
   const attachStart = Date.now();
@@ -126,6 +158,18 @@ async function runDeploy(options: DeployOptions): Promise<void> {
   ui.label('GPU Memory', `${blueprint.deploymentConfig.gpuMemoryGB}GB`);
   ui.label('Deploy Time', ui.formatMs(totalTime));
   ui.blank();
+  if (deployResult.endpoint_url) {
+    ui.blank();
+    ui.success('Live endpoint ready:');
+    ui.label('Endpoint', deployResult.endpoint_url);
+    ui.blank();
+    ui.info('Test it:');
+    ui.info(`curl -X POST ${deployResult.endpoint_url} \\`);
+    ui.info('  -H "Content-Type: application/json" \\');
+    ui.info(`  -d '{"input": "hello"}'`);
+  } else {
+    ui.warn('No live endpoint returned — check Modal credentials');
+  }
   ui.success(`Deployed in ${ui.formatMs(totalTime)}`);
   ui.info(`Check status: auraops status ${deployResult.deploymentId}`);
 }

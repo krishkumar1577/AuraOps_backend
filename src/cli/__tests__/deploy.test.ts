@@ -80,6 +80,8 @@ describe('CLI: auraops deploy', () => {
         workerId: 'worker-001',
         status: 'running',
         estimatedTime: 26800,
+        endpoint_url: 'https://workspace--auraops-dep-001.modal.run',
+        endpoint_status: 'live',
       },
     });
 
@@ -95,6 +97,7 @@ describe('CLI: auraops deploy', () => {
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Blueprint validated'));
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Agent live'));
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Deployed'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Endpoint'));
   });
 
   it('should show deployment details after success', async () => {
@@ -107,6 +110,8 @@ describe('CLI: auraops deploy', () => {
         agentId: 'agent-002',
         status: 'running',
         estimatedTime: 15000,
+        endpoint_url: 'https://workspace--auraops-dep-002.modal.run',
+        endpoint_status: 'live',
       },
     });
 
@@ -174,6 +179,8 @@ describe('CLI: auraops deploy', () => {
         agentId: 'agent-004',
         status: 'running',
         estimatedTime: 25000,
+        endpoint_url: 'https://workspace--auraops-dep-004.modal.run',
+        endpoint_status: 'live',
       },
     });
 
@@ -185,5 +192,45 @@ describe('CLI: auraops deploy', () => {
     expect(gpuReqs.minMemory).toBe(8);
     expect(gpuReqs.framework).toBe('pytorch');
     expect(gpuReqs.pythonVersion).toBe('3.11');
+  });
+
+  it('should poll for endpoint url when not returned immediately', async () => {
+    const blueprintPath = path.join(tmpDir, 'blueprint.json');
+    await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
+
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        deploymentId: 'dep-005',
+        agentId: 'agent-005',
+        status: 'deploying',
+        estimatedTime: 25000,
+      },
+    });
+    mockedAxios.get.mockResolvedValueOnce({
+      data: {
+        endpointUrl: 'https://workspace--auraops-dep-005.modal.run',
+        endpoint_status: 'live',
+      },
+    });
+
+    const setTimeoutSpy = jest
+      .spyOn(global, 'setTimeout')
+      .mockImplementation(((callback: () => void) => {
+        callback();
+        return 0 as unknown as NodeJS.Timeout;
+      }) as typeof setTimeout);
+
+    try {
+      await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/deployment/dep-005'),
+      expect.any(Object),
+    );
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Waiting for live endpoint'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Endpoint'));
   });
 });
