@@ -234,9 +234,14 @@ export class ModalProvider extends BaseGPUProvider {
         appName,
       };
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error(
+        `Modal persistent app deployment failed in modalProvider: ${errorMsg}`,
+        { deploymentId, error: errorMsg },
+      );
       if (error instanceof DeploymentError) throw error;
       throw new DeploymentError('Modal: Persistent app deployment failed', {
-        cause: error instanceof Error ? error.message : String(error),
+        cause: errorMsg,
         deploymentId,
       });
     }

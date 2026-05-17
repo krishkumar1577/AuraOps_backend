@@ -447,9 +447,19 @@ export class Orchestrator {
         deploymentTime,
       };
     } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorDetails = error instanceof DeploymentError ? error.details : {};
+      logger.error(
+        `Modal persistent deployment failed: ${errorMessage}`,
+        {
+          deploymentId,
+          error: errorMessage,
+          details: errorDetails,
+        },
+      );
       throw this.toDeploymentError(
         'Failed to deploy persistent Modal app',
-        { deploymentId },
+        { deploymentId, originalError: errorMessage },
         error,
       );
     }
