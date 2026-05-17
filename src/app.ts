@@ -1,3 +1,4 @@
+import { spawnSync } from 'child_process';
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -10,6 +11,21 @@ import { createDefaultOrchestrator } from './services/orchestration/defaultOrche
 import authPlugin from './plugins/auth';
 import { logger } from './utils/logger';
 import config from './utils/config';
+
+function logModalCliAvailability(): void {
+  const result = spawnSync('modal', ['--version'], { encoding: 'utf-8' });
+
+  if (result.status === 0) {
+    const version = result.stdout.trim() || 'unknown';
+    logger.info(`Modal CLI available: ${version}`);
+    return;
+  }
+
+  const errorMessage = result.error instanceof Error
+    ? result.error.message
+    : result.stderr?.trim() || 'unknown error';
+  logger.warn(`Modal CLI not available: ${errorMessage}`);
+}
 
 export async function createApp(): Promise<FastifyInstance> {
   const fastify = Fastify({
@@ -97,6 +113,7 @@ export async function startServer() {
   const fastify = await createApp();
 
   try {
+    logModalCliAvailability();
     await fastify.listen({ port: config.port, host: '0.0.0.0' });
     logger.info(`✓ Server running on http://0.0.0.0:${config.port}`);
   } catch (err) {
