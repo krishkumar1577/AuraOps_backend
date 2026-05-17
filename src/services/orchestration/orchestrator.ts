@@ -5,6 +5,8 @@ import type { BlueprintJSON } from '../../types/blueprint.types';
 
 const DEPLOYMENT_STATE_PREFIX = 'orchestration:deployment:';
 const ACTIVE_DEPLOYMENTS_KEY = 'orchestration:active-deployments';
+const DEPLOYMENT_RECORD_PREFIX = 'deployment:';
+const DEPLOYMENT_RECORDS_KEY = 'deployments:all';
 const HEALTH_CHECK_TIMEOUT_MS = 60000;
 const DEPLOYMENT_TIMEOUT_MS = 300000;
 const WORKER_ACQUISITION_TIMEOUT_MS = 60000;
@@ -40,9 +42,25 @@ export interface DeploymentStatus {
   status: 'pending' | 'deploying' | 'running' | 'failed';
   startTime: number;
   containerImage: string;
-  gpuUtilization: number;
+  gpuUtilization?: number | null;
   lastActivityAt: number;
   error?: string;
+}
+
+export interface DeploymentRecord {
+  deploymentId: string;
+  agentId: string;
+  workerId: string;
+  status: 'pending' | 'deploying' | 'running' | 'failed';
+  startTime: number;
+  estimatedTime: number;
+  blueprintId: string;
+  lockfilePath: string;
+  environmentHash: string;
+  error?: string;
+  endpointUrl?: string;
+  appName?: string;
+  endpointStatus?: 'pending' | 'live' | 'failed';
 }
 
 interface StoredDeployment {
@@ -51,7 +69,7 @@ interface StoredDeployment {
   status: 'pending' | 'deploying' | 'running' | 'failed';
   startTime: number;
   containerImage: string;
-  gpuUtilization: number;
+  gpuUtilization?: number | null;
   lastActivityAt: number;
   error?: string;
 }
@@ -145,7 +163,7 @@ export class Orchestrator {
   async deployAgent(
     workerId: string,
     blueprint: BlueprintJSON,
-    lockfilePath: string,
+    _lockfilePath: string,
     environmentHash: string,
   ): Promise<{ agentId: string; status: string; deploymentTime: number }> {
     const start = Date.now();
@@ -160,9 +178,6 @@ export class Orchestrator {
       // Validate inputs
       if (!blueprint.id) {
         throw new DeploymentError('Blueprint missing ID', { blueprintId: blueprint.id });
-      }
-      if (!lockfilePath) {
-        throw new DeploymentError('Lockfile path required', { lockfilePath });
       }
       if (!environmentHash) {
         throw new DeploymentError('Environment hash required', { environmentHash });
@@ -194,7 +209,6 @@ export class Orchestrator {
         startTime: Date.now(),
         lastActivityAt: Date.now(),
         containerImage: `${blueprint.systemRequirements.baseImageId}:${blueprint.systemRequirements.baseImageTag}`,
-        gpuUtilization: 0,
       };
 
       const deploymentKey = this.deploymentKey(agentId);
@@ -263,7 +277,6 @@ export class Orchestrator {
 
       // Update to running
       deployment.status = 'running';
-      deployment.gpuUtilization = 85; // Simulated initial utilization
       deployment.lastActivityAt = Date.now();
       await this.redisClient.set(deploymentKey, JSON.stringify(deployment), {
         EX: 86400,
@@ -289,7 +302,6 @@ export class Orchestrator {
           startTime: Date.now(),
           lastActivityAt: Date.now(),
           containerImage: blueprint.systemRequirements?.baseImageId || 'unknown',
-          gpuUtilization: 0,
         };
         deployment.status = 'failed';
         deployment.lastActivityAt = Date.now();
@@ -498,6 +510,51 @@ export class Orchestrator {
 
   private deploymentKey(agentId: string): string {
     return `${DEPLOYMENT_STATE_PREFIX}${agentId}`;
+  }
+
+  private deploymentRecordKey(deploymentId: string): string {
+    return `${DEPLOYMENT_RECORD_PREFIX}${deploymentId}`;
+  }
+
+  async saveDeploymentRecord(record: DeploymentRecord): Promise<void> {
+    await this.ensureConnected();
+    await this.redisClient.set(this.deploymentRecordKey(record.deploymentId), JSON.stringify(record), {
+      EX: 86400,
+    });
+    await this.redisClient.sAdd(DEPLOYMENT_RECORDS_KEY, record.deploymentId);
+  }
+
+  async getDeploymentRecord(deploymentId: string): Promise<DeploymentRecord | null> {
+    await this.ensureConnected();
+    const payload = await this.redisClient.get(this.deploymentRecordKey(deploymentId));
+    if (!payload) {
+      return null;
+    }
+
+    return JSON.parse(payload) as DeploymentRecord;
+  }
+
+  async deleteDeploymentRecord(deploymentId: string): Promise<void> {
+    await this.ensureConnected();
+    await this.redisClient.del(this.deploymentRecordKey(deploymentId));
+    await this.redisClient.sRem(DEPLOYMENT_RECORDS_KEY, deploymentId);
+  }
+
+  async listDeploymentRecords(): Promise<DeploymentRecord[]> {
+    await this.ensureConnected();
+    const deploymentIds = await this.redisClient.sMembers(DEPLOYMENT_RECORDS_KEY);
+    const records: DeploymentRecord[] = [];
+
+    for (const deploymentId of deploymentIds) {
+      const payload = await this.redisClient.get(this.deploymentRecordKey(deploymentId));
+      if (!payload) {
+        continue;
+      }
+
+      records.push(JSON.parse(payload) as DeploymentRecord);
+    }
+
+    return records;
   }
 
   private async ensureConnected(): Promise<void> {

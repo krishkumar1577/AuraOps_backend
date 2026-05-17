@@ -1,9 +1,10 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
-import { Orchestrator, WorkerRequirements, DeploymentStatus } from '../../services/orchestration';
+import { Orchestrator, WorkerRequirements, DeploymentStatus, DeploymentRecord } from '../../services/orchestration';
 import { DeploymentError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
+import { config } from '../../utils/config';
 import type { BlueprintJSON } from '../../types/blueprint.types';
 
 // Zod schemas for request validation
@@ -29,8 +30,14 @@ const DeployRequestSchema = z.object({
       baseImageId: z.string(),
       baseImageTag: z.string(),
     }),
+    dependencyLock: z.record(z.string()).optional(),
+    deploymentConfig: z.object({
+      gpuMemoryGB: z.number().optional(),
+      entrypoint: z.string().optional(),
+    }).optional(),
+    customModels: z.array(z.any()).optional(),
   }),
-  lockfilePath: z.string().min(1, 'Lockfile path required'),
+  lockfilePath: z.string(),
   environmentHash: z.string().min(1, 'Environment hash required'),
   gpuRequirements: GPURequirementsSchema,
 });
@@ -41,28 +48,10 @@ const DeploymentIdParamSchema = z.object({
 
 type DeployRequest = z.infer<typeof DeployRequestSchema>;
 
-interface DeploymentRecord {
-  deploymentId: string;
-  agentId: string;
-  workerId: string;
-  status: 'pending' | 'deploying' | 'running' | 'failed';
-  startTime: number;
-  estimatedTime: number;
-  blueprintId: string;
-  lockfilePath: string;
-  environmentHash: string;
-  error?: string;
-  endpointUrl?: string;
-  appName?: string;
-}
-
 export async function deploymentRoutes(
   fastify: FastifyInstance,
   orchestrator: Orchestrator,
 ): Promise<void> {
-  // In-memory storage for deployment records (in production, use Redis)
-  const deployments = new Map<string, DeploymentRecord>();
-
   /**
    * POST /api/v1/deploy
    * Deploy AI agent to GPU
@@ -195,15 +184,16 @@ export async function deploymentRoutes(
           deploymentId,
           agentId: agentIdRef.value,
           workerId,
-          status: 'running',
+          status: 'deploying',
           startTime: Date.now(),
           estimatedTime: totalTime,
           blueprintId,
           lockfilePath,
           environmentHash,
+          endpointStatus: 'pending',
         };
 
-        deployments.set(deploymentId, deployment);
+        await orchestrator.saveDeploymentRecord(deployment);
         logger.info(
           `✓ Deployment recorded in ${Date.now() - startTime}ms: deploymentId=${deploymentId}`,
         );
@@ -213,10 +203,7 @@ export async function deploymentRoutes(
         let appName: string | undefined;
         let modalDeploymentError: string | undefined;
 
-        if (
-          gpuRequirements.framework === 'modal' ||
-          blueprintJson.framework.framework === 'langchain'
-        ) {
+        if (config.modal_token_id && config.modal_token_secret) {
           try {
             const modalDeployStartTime = Date.now();
             const modalResult = await orchestrator.deployPersistentModal(
@@ -229,7 +216,9 @@ export async function deploymentRoutes(
 
             deployment.endpointUrl = endpointUrl;
             deployment.appName = appName;
-            deployments.set(deploymentId, deployment);
+            deployment.status = 'running';
+            deployment.endpointStatus = 'live';
+            await orchestrator.saveDeploymentRecord(deployment);
 
             const modalTime = Date.now() - modalDeployStartTime;
             logger.info(
@@ -240,8 +229,14 @@ export async function deploymentRoutes(
             logger.warn(
               `Persistent Modal deployment failed: ${modalDeploymentError}`,
             );
-            // Don't fail the deployment if Modal app fails - regular deployment still works
+            deployment.status = 'deploying';
+            deployment.endpointStatus = 'failed';
+            deployment.error = modalDeploymentError;
+            await orchestrator.saveDeploymentRecord(deployment);
           }
+        } else {
+          deployment.endpointStatus = 'pending';
+          await orchestrator.saveDeploymentRecord(deployment);
         }
 
         const deploymentResponse: Record<string, unknown> = {
@@ -249,9 +244,10 @@ export async function deploymentRoutes(
           deploymentId,
           agentId: agentIdRef.value,
           workerId,
-          status: 'running',
+          status: endpointUrl ? 'running' : 'deploying',
           createdAt: Date.now(),
           estimatedTime: totalTime,
+          endpoint_status: modalDeploymentError ? 'failed' : endpointUrl ? 'live' : 'pending',
         };
 
         // Only include endpoint_url if Modal deployment succeeded
@@ -295,7 +291,7 @@ export async function deploymentRoutes(
         const params = request.params as Record<string, string>;
         const { deploymentId } = DeploymentIdParamSchema.parse(params);
 
-        const deployment = deployments.get(deploymentId);
+        const deployment = await orchestrator.getDeploymentRecord(deploymentId);
         if (!deployment) {
           logger.warn(`Deployment not found: ${deploymentId}`);
           return reply.code(404).send({
@@ -323,23 +319,27 @@ export async function deploymentRoutes(
             latency: Date.now() - startTime,
             endpointUrl: deployment.endpointUrl,
             appName: deployment.appName,
+            endpoint_status: deployment.endpointStatus ?? (deployment.endpointUrl ? 'live' : 'pending'),
           });
         }
 
         const responseTime = Date.now() - startTime;
         logger.info(`✓ Status retrieved in ${responseTime}ms: deploymentId=${deploymentId}`);
+        const responseStatus = deployment.endpointStatus === 'live'
+          ? agentStatus.status
+          : deployment.status;
 
         return reply.code(200).send({
           success: true,
           deploymentId,
           agentId: agentStatus.agentId,
           workerId: agentStatus.workerId,
-          status: agentStatus.status,
+          status: responseStatus,
           startTime: agentStatus.startTime,
           latency: responseTime,
-          gpuUtilization: agentStatus.gpuUtilization,
           endpointUrl: deployment.endpointUrl,
           appName: deployment.appName,
+          endpoint_status: deployment.endpointStatus ?? (deployment.endpointUrl ? 'live' : 'pending'),
           error: agentStatus.error,
         });
       } catch (error) {
@@ -375,7 +375,7 @@ export async function deploymentRoutes(
         const params = request.params as Record<string, string>;
         const { deploymentId } = DeploymentIdParamSchema.parse(params);
 
-        const deployment = deployments.get(deploymentId);
+        const deployment = await orchestrator.getDeploymentRecord(deploymentId);
         if (!deployment) {
           logger.warn(`Deployment not found for cleanup: ${deploymentId}`);
           return reply.code(404).send({
@@ -406,7 +406,7 @@ export async function deploymentRoutes(
         }
 
         // Remove deployment record
-        deployments.delete(deploymentId);
+        await orchestrator.deleteDeploymentRecord(deploymentId);
 
         const totalTime = Date.now() - startTime;
         logger.info(`✓ Deployment cleanup complete in ${totalTime}ms: deploymentId=${deploymentId}`);
@@ -450,7 +450,7 @@ export async function deploymentRoutes(
         const params = request.params as Record<string, string>;
         const { deploymentId } = DeploymentIdParamSchema.parse(params);
 
-        const deployment = deployments.get(deploymentId);
+        const deployment = await orchestrator.getDeploymentRecord(deploymentId);
         if (!deployment) {
           logger.warn(`Deployment not found for logs: ${deploymentId}`);
           return reply.code(404).send({
@@ -544,20 +544,16 @@ export async function deploymentRoutes(
         }
 
         // Map to agent list format
+        const cachedDeployments = await orchestrator.listDeploymentRecords();
         const agents = orchestratorDeployments.map(dep => {
-          const deployment = deployments.get(
-            Array.from(deployments.entries()).find(
-              ([, d]) => d.agentId === dep.agentId,
-            )?.[0] || '',
-          );
-
+          const deployment = cachedDeployments.find((cached) => cached.agentId === dep.agentId);
           return {
             deploymentId: deployment?.deploymentId || 'unknown',
             agentId: dep.agentId,
             status: dep.status,
             gpuType: 'gpu', // Would come from worker info in production
             uptime: dep.startTime ? Date.now() - dep.startTime : 0,
-            gpuUtilization: dep.gpuUtilization,
+            gpuUtilization: dep.gpuUtilization ?? null,
             workerId: dep.workerId,
           };
         });
@@ -596,7 +592,7 @@ export async function deploymentRoutes(
         const params = request.params as Record<string, string>;
         const { deploymentId } = DeploymentIdParamSchema.parse(params);
 
-        const deployment = deployments.get(deploymentId);
+        const deployment = await orchestrator.getDeploymentRecord(deploymentId);
         if (!deployment) {
           logger.warn(`Deployment not found: ${deploymentId}`);
           return reply.code(404).send({
@@ -622,7 +618,8 @@ export async function deploymentRoutes(
 
           deployment.endpointUrl = undefined;
           deployment.appName = undefined;
-          deployments.set(deploymentId, deployment);
+          deployment.endpointStatus = 'pending';
+          await orchestrator.saveDeploymentRecord(deployment);
 
           const stopTime = Date.now() - startTime;
           logger.info(`✓ Modal app stopped in ${stopTime}ms: ${deploymentId}`);

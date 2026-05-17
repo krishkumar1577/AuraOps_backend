@@ -675,7 +675,7 @@ describe('Phase 4: GPU Deployment Orchestration Integration', () => {
       expect(health.latency).toBeLessThan(100);
     });
 
-    it('should track GPU utilization metrics', async () => {
+    it('should not expose fake GPU utilization metrics', async () => {
       const requirements: WorkerRequirements = {
         minGPUMemory: 24,
         framework: 'pytorch',
@@ -693,8 +693,7 @@ describe('Phase 4: GPU Deployment Orchestration Integration', () => {
 
       const status = await orchestrator.getDeploymentStatus(deployment.agentId);
 
-      expect(status?.gpuUtilization).toBeGreaterThanOrEqual(0);
-      expect(status?.gpuUtilization).toBeLessThanOrEqual(100);
+      expect(status?.gpuUtilization).toBeUndefined();
     });
 
     it('should track memory usage', async () => {

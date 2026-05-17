@@ -155,13 +155,9 @@ ${loaderCode}
             return str(result[0])
             
         else:
-            # Custom/Ghost manifest - try to call agent
-            if self.agent and hasattr(self.agent, 'infer'):
-                return self.agent.infer(input_text)
-            elif self.agent and hasattr(self.agent, 'run'):
-                return self.agent.run(input_text)
-            else:
-                return f"Processed by {framework} agent"
+            raise ValueError(
+                f"Unsupported framework: {framework}. Supported: langchain, transformers, pytorch, jax, tensorflow"
+            )
 
 # Health check endpoint
 @app.function(image=image)
@@ -274,27 +270,9 @@ ${indent}self.model = tf.keras.models.load_model(model_path)
 ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
 
       default:
-        // Ghost manifest / raw Python
-        return `${indent}# Custom agent initialization
-${indent}import importlib.util
-${indent}
-${indent}# Load user-defined agent from main.py if available
-${indent}try:
-${indent}    spec = importlib.util.spec_from_file_location("agent_module", "main.py")
-${indent}    agent_module = importlib.util.module_from_spec(spec)
-${indent}    spec.loader.exec_module(agent_module)
-${indent}    
-${indent}    if hasattr(agent_module, 'Agent'):
-${indent}        self.agent = agent_module.Agent()
-${indent}    elif hasattr(agent_module, 'agent'):
-${indent}        self.agent = agent_module.agent
-${indent}    
-${indent}    print("✓ Custom agent loaded from main.py")
-${indent}except FileNotFoundError:
-${indent}    print("Note: main.py not found, using default agent")
-${indent}    self.agent = type('Agent', (), {
-${indent}        'infer': lambda self, x: f"Default response to: {x}"
-${indent}    })()`;
+        throw new Error(
+          `Unsupported framework: ${framework}. Supported: langchain, transformers, pytorch, jax, tensorflow`,
+        );
     }
   }
 
@@ -385,9 +363,11 @@ ${indent}    })()`;
           return;
         }
 
+        logger.info(`Modal deploy full stdout: ${stdout}`);
+        logger.info(`Modal deploy full stderr: ${stderr}`);
+
         // Extract HTTPS URL from Modal deploy output
-        // Format: "https://{workspace}--auraops-{id}.modal.run"
-        const urlMatch = stdout.match(/https:\/\/[\w-]+--auraops-[\w-]+\.modal\.run/);
+        const urlMatch = stdout.match(/https:\/\/[\w.-]+\.modal\.run[^\s]*/);
         if (!urlMatch) {
           logger.warn(
             `Could not find HTTPS URL in Modal output. Full output:\n${stdout}`,

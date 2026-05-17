@@ -17,9 +17,11 @@ describe('Deployment API Routes', () => {
   let mockFastify: any;
   let mockOrchestrator: jest.Mocked<Orchestrator>;
   let mockReply: any;
+  let deploymentStore: Map<string, Record<string, any>>;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    deploymentStore = new Map();
 
     // Create mock Orchestrator
     mockOrchestrator = {
@@ -28,6 +30,19 @@ describe('Deployment API Routes', () => {
       deployAgent: jest.fn(),
       getDeploymentStatus: jest.fn(),
       listDeployments: jest.fn(),
+      saveDeploymentRecord: jest.fn(async (record) => {
+        deploymentStore.set(record.deploymentId, record);
+      }),
+      getDeploymentRecord: jest.fn(async (deploymentId) => deploymentStore.get(deploymentId) ?? null),
+      deleteDeploymentRecord: jest.fn(async (deploymentId) => {
+        deploymentStore.delete(deploymentId);
+      }),
+      listDeploymentRecords: jest.fn(async () => Array.from(deploymentStore.values())),
+      deployPersistentModal: jest.fn().mockResolvedValue({
+        endpointUrl: 'https://workspace--auraops-dep.modal.run',
+        appName: 'auraops-dep',
+      }),
+      stopPersistentModal: jest.fn(),
     } as any;
 
     // Create mock Fastify instance
@@ -141,6 +156,7 @@ describe('Deployment API Routes', () => {
           agentId: 'agent-456',
           workerId: 'worker-123',
           status: 'running',
+          endpoint_status: 'live',
         }),
       );
       expect(logger.info).toHaveBeenCalledWith(
@@ -498,7 +514,7 @@ describe('Deployment API Routes', () => {
         expect.objectContaining({
           success: true,
           status: 'running',
-          gpuUtilization: 85,
+          endpoint_status: 'live',
         }),
       );
     });
@@ -533,14 +549,13 @@ describe('Deployment API Routes', () => {
       );
     });
 
-    it('should include GPU metrics in response', async () => {
+    it('should omit fake GPU metrics in response', async () => {
       const mockStatus: DeploymentStatus = {
         agentId: 'agent-456',
         workerId: 'worker-123',
         status: 'running',
         startTime: Date.now() - 10000,
         containerImage: 'auraops/pytorch:cuda12.1-py3.10',
-        gpuUtilization: 92,
         lastActivityAt: Date.now(),
       };
 
@@ -552,11 +567,7 @@ describe('Deployment API Routes', () => {
 
       await getStatusHandler(request, mockReply);
 
-      expect(mockReply.send).toHaveBeenCalledWith(
-        expect.objectContaining({
-          gpuUtilization: 92,
-        }),
-      );
+      expect(mockReply.send.mock.calls[0][0]).not.toHaveProperty('gpuUtilization');
     });
   });
 

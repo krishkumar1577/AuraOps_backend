@@ -21,6 +21,22 @@ async function loadBlueprint(blueprintPath: string): Promise<BlueprintJSON> {
   }
 }
 
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveProjectRoot(blueprintPath: string): string {
+  const blueprintDir = path.dirname(blueprintPath);
+  return path.basename(blueprintDir) === '.auraops'
+    ? path.resolve(blueprintDir, '..')
+    : blueprintDir;
+}
+
 async function runDeploy(options: DeployOptions): Promise<void> {
   const start = Date.now();
 
@@ -37,6 +53,15 @@ async function runDeploy(options: DeployOptions): Promise<void> {
   const blueprint = await loadBlueprint(blueprintPath);
   ui.step('Blueprint validated', ui.formatMs(Date.now() - validateStart));
 
+  const projectPath = resolveProjectRoot(blueprintPath);
+  const requirementsLock = path.join(projectPath, 'requirements.lock');
+  const requirementsTxt = path.join(projectPath, 'requirements.txt');
+  const lockfilePath = (await fileExists(requirementsLock))
+    ? requirementsLock
+    : (await fileExists(requirementsTxt))
+      ? requirementsTxt
+      : '';
+
   const apiUrl = ui.resolveApiUrl();
   const headers = ui.getAuthHeaders(options.token);
 
@@ -46,8 +71,8 @@ async function runDeploy(options: DeployOptions): Promise<void> {
   const deployPayload = {
     blueprintId: blueprint.id,
     blueprintJson: blueprint,
-    lockfilePath: path.join(path.dirname(blueprintPath), 'requirements.lock'),
-    environmentHash: blueprint.checksums.allDepsHash,
+    lockfilePath,
+    environmentHash: blueprint.checksums?.allDepsHash ?? blueprint.id ?? 'no-hash',
     gpuRequirements: {
       minMemory: blueprint.deploymentConfig.gpuMemoryGB,
       framework: blueprint.framework.framework,

@@ -336,7 +336,7 @@ describe('Orchestrator', () => {
       ).rejects.toThrow(DeploymentError);
     });
 
-    it('should throw on missing lockfile path', async () => {
+    it('should allow missing lockfile path', async () => {
       const requirements: WorkerRequirements = {
         minGPUMemory: 4,
         framework: 'pytorch',
@@ -345,14 +345,14 @@ describe('Orchestrator', () => {
       const worker = await orchestrator.acquireWorker(requirements);
       const blueprint = createBlueprintFixture();
 
-      await expect(
-        orchestrator.deployAgent(
-          worker.workerId,
-          blueprint,
-          '',
-          'env-hash-123'
-        )
-      ).rejects.toThrow(DeploymentError);
+      const result = await orchestrator.deployAgent(
+       worker.workerId,
+       blueprint,
+       '',
+       'env-hash-123'
+      );
+
+      expect(result.status).toBe('running');
     });
 
     it('should throw on missing environment hash', async () => {
@@ -478,7 +478,7 @@ describe('Orchestrator', () => {
       expect(status.workerId).toBe(worker.workerId);
       expect(status.status).toBe('running');
       expect(status.containerImage).toBeDefined();
-      expect(status.gpuUtilization).toBeGreaterThanOrEqual(0);
+      expect(status.gpuUtilization).toBeUndefined();
     });
 
     it('should throw for non-existent deployment', async () => {
@@ -487,7 +487,7 @@ describe('Orchestrator', () => {
       ).rejects.toThrow(DeploymentError);
     });
 
-    it('should include GPU utilization', async () => {
+    it('should not include fake GPU utilization', async () => {
       const requirements: WorkerRequirements = {
         minGPUMemory: 4,
         framework: 'pytorch',
@@ -504,7 +504,7 @@ describe('Orchestrator', () => {
       );
 
       const status = await orchestrator.getDeploymentStatus(deployment.agentId);
-      expect(status.gpuUtilization).toBeGreaterThan(0);
+      expect(status.gpuUtilization).toBeUndefined();
     });
   });
 

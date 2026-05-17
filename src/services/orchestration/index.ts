@@ -4,6 +4,7 @@ export type {
   WorkerRequirements,
   WorkerInfo,
   DeploymentStatus,
+  DeploymentRecord,
   RedisClient,
 } from './orchestrator';
 
