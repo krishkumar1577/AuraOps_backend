@@ -153,14 +153,13 @@ describe('Deployment API Routes', () => {
       expect(mockReply.send).toHaveBeenCalledWith(
         expect.objectContaining({
           success: true,
-          agentId: 'agent-456',
-          workerId: 'worker-123',
+          deploymentId: expect.any(String),
           status: 'running',
-          endpoint_status: 'live',
+          endpoint_url: 'https://workspace--auraops-dep.modal.run',
         }),
       );
       expect(logger.info).toHaveBeenCalledWith(
-        expect.stringContaining('Starting deployment'),
+        expect.stringContaining('Starting Modal deployment'),
       );
     });
 
@@ -223,10 +222,10 @@ describe('Deployment API Routes', () => {
       );
     });
 
-    it('should handle no available workers error', async () => {
-      mockOrchestrator.acquireWorker.mockRejectedValue(
-        new DeploymentError('No available workers matching requirements', {
-          requirements: { minGPUMemory: 8 },
+    it('should handle Modal deployment failure gracefully', async () => {
+      mockOrchestrator.deployPersistentModal.mockRejectedValue(
+        new DeploymentError('Modal deployment failed', {
+          error: 'Authentication failed',
         }),
       );
 
@@ -260,29 +259,16 @@ describe('Deployment API Routes', () => {
 
       await deployHandler(request, mockReply);
 
-      expect(mockReply.code).toHaveBeenCalledWith(409);
+      expect(mockReply.code).toHaveBeenCalledWith(500);
       expect(mockReply.send).toHaveBeenCalledWith(
         expect.objectContaining({
           success: false,
-          error: 'No available workers matching requirements',
         }),
       );
     });
 
-    it('should handle deployment timeout', async () => {
-      const mockWorker: WorkerInfo = {
-        workerId: 'worker-123',
-        gpuId: 'gpu-0',
-        ipAddress: '192.168.1.1',
-        port: 8000,
-        gpuMemoryGB: 16,
-        availableGPUMemory: 14,
-        provider: 'lambda-labs',
-        secureRuntimeActive: true,
-      };
-
-      mockOrchestrator.acquireWorker.mockResolvedValue(mockWorker);
-      mockOrchestrator.deployAgent.mockRejectedValue(
+    it('should handle Modal deployment timeout', async () => {
+      mockOrchestrator.deployPersistentModal.mockRejectedValue(
         new DeploymentError('Deployment exceeded timeout', { timeout: 30000 }),
       );
 
@@ -316,16 +302,13 @@ describe('Deployment API Routes', () => {
 
       await deployHandler(request, mockReply);
 
-      expect(mockReply.code).toHaveBeenCalledWith(504);
+      expect(mockReply.code).toHaveBeenCalledWith(500);
       expect(mockReply.send).toHaveBeenCalledWith(
         expect.objectContaining({
           success: false,
-          error: 'Deployment timeout',
+          modal_deployment_error: expect.any(String),
         }),
       );
-
-      // Verify worker was released on failure
-      expect(mockOrchestrator.releaseWorker).toHaveBeenCalledWith('worker-123');
     });
 
     it('should validate Python version format', async () => {
@@ -418,7 +401,7 @@ describe('Deployment API Routes', () => {
       await deployHandler(request, mockReply);
 
       expect(logger.info).toHaveBeenCalledWith(
-        expect.stringContaining('Agent deployed in'),
+        expect.stringContaining('Persistent Modal endpoint deployed in'),
       );
     });
   });
@@ -877,7 +860,7 @@ describe('Deployment API Routes', () => {
     });
 
     it('should handle internal server errors', async () => {
-      mockOrchestrator.acquireWorker.mockRejectedValue(
+      mockOrchestrator.deployPersistentModal.mockRejectedValue(
         new Error('Unexpected internal error'),
       );
 
@@ -915,14 +898,14 @@ describe('Deployment API Routes', () => {
       expect(mockReply.send).toHaveBeenCalledWith(
         expect.objectContaining({
           success: false,
-          error: expect.any(String),
+          modal_deployment_error: expect.any(String),
         }),
       );
     });
 
     it('should log errors with details', async () => {
-      mockOrchestrator.acquireWorker.mockRejectedValue(
-        new DeploymentError('Worker acquisition failed', {
+      mockOrchestrator.deployPersistentModal.mockRejectedValue(
+        new DeploymentError('Modal deployment failed', {
           timeout: 5000,
         }),
       );

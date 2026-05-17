@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
-import { Orchestrator, WorkerRequirements, DeploymentStatus, DeploymentRecord } from '../../services/orchestration';
+import { Orchestrator, DeploymentStatus } from '../../services/orchestration';
 import { DeploymentError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { config } from '../../utils/config';
@@ -83,191 +83,63 @@ export async function deploymentRoutes(
         }
 
         const {
-          blueprintId,
           blueprintJson,
-          lockfilePath,
-          environmentHash,
-          gpuRequirements,
         } = validatedData;
 
-        logger.info(
-          `Starting deployment: blueprintId=${blueprintId}, framework=${gpuRequirements.framework}`,
-        );
-
-        // Acquire worker
-        const workerRequirements: WorkerRequirements = {
-          minGPUMemory: gpuRequirements.minMemory,
-          framework: gpuRequirements.framework,
-          pythonVersion: gpuRequirements.pythonVersion,
-        };
-
-        let workerId: string;
-        const workerStartTime = Date.now();
-        try {
-          const worker = await orchestrator.acquireWorker(workerRequirements);
-          workerId = worker.workerId;
-          const workerTime = Date.now() - workerStartTime;
-          logger.info(`✓ Worker acquired in ${workerTime}ms: ${workerId}`);
-        } catch (error) {
-          const err = error instanceof DeploymentError ? error : new DeploymentError(
-            error instanceof Error ? error.message : 'Worker acquisition failed',
-            { blueprintId },
-          );
-
-          if (err.statusCode === 409 || err.message.includes('No available workers')) {
-            logger.warn(`No available workers for deployment: ${blueprintId}`);
-            return reply.code(409).send({
-              success: false,
-              error: 'No available workers matching requirements',
-              details: { requirements: workerRequirements },
-            });
-          }
-
-          if (err.message.includes('timeout')) {
-            logger.warn(`Worker acquisition timeout for deployment: ${blueprintId}`);
-            return reply.code(504).send({
-              success: false,
-              error: 'Worker acquisition timeout',
-            });
-          }
-
-          throw err;
-        }
-
-        // Deploy agent to worker
         const deploymentId = uuidv4();
-        const agentIdRef = { value: '' };
 
-        const agentStartTime = Date.now();
-        try {
-          const result = await orchestrator.deployAgent(
-            workerId,
-            blueprintJson as BlueprintJSON,
-            lockfilePath,
-            environmentHash,
-          );
-
-          agentIdRef.value = result.agentId;
-          const agentTime = Date.now() - agentStartTime;
-          logger.info(`✓ Agent deployed in ${agentTime}ms: agentId=${result.agentId}`);
-        } catch (error) {
-          const err = error instanceof DeploymentError ? error : new DeploymentError(
-            error instanceof Error ? error.message : 'Agent deployment failed',
-            { blueprintId, workerId },
-          );
-
-          // Release worker on failure
-          try {
-            await orchestrator.releaseWorker(workerId);
-            logger.info(`Worker released after deployment failure: ${workerId}`);
-          } catch (releaseError) {
-            logger.warn(
-              `Failed to release worker: ${releaseError instanceof Error ? releaseError.message : 'unknown error'}`,
-            );
-          }
-
-          if (err.message.includes('timeout')) {
-            logger.warn(`Agent deployment timeout: blueprintId=${blueprintId}`);
-            return reply.code(504).send({
-              success: false,
-              error: 'Deployment timeout',
-              details: { blueprintId },
-            });
-          }
-
-          throw err;
-        }
-
-        // Store deployment record
-        const totalTime = Date.now() - startTime;
-        const deployment: DeploymentRecord = {
-          deploymentId,
-          agentId: agentIdRef.value,
-          workerId,
-          status: 'deploying',
-          startTime: Date.now(),
-          estimatedTime: totalTime,
-          blueprintId,
-          lockfilePath,
-          environmentHash,
-          endpointStatus: 'pending',
-        };
-
-        await orchestrator.saveDeploymentRecord(deployment);
         logger.info(
-          `✓ Deployment recorded in ${Date.now() - startTime}ms: deploymentId=${deploymentId}`,
+          `Starting Modal deployment: deploymentId=${deploymentId}, framework=${blueprintJson.framework?.framework}`,
         );
 
-        // Try to deploy persistent Modal app if provider is Modal
+        // Skip sandbox acquisition entirely
+        // modal deploy handles GPU allocation
         let endpointUrl: string | undefined;
         let appName: string | undefined;
-        let modalDeploymentError: string | undefined;
+        let modalError: string | undefined;
 
-        if (config.modal_token_id && config.modal_token_secret) {
-          try {
-            const modalDeployStartTime = Date.now();
-            const modalResult = await orchestrator.deployPersistentModal(
-              deploymentId,
-              blueprintJson as BlueprintJSON,
-            );
+        try {
+          const result = await orchestrator.deployPersistentModal(
+            deploymentId,
+            blueprintJson as BlueprintJSON,
+          );
+          endpointUrl = result.endpointUrl;
+          appName = result.appName;
 
-            endpointUrl = modalResult.endpointUrl;
-            appName = modalResult.appName;
-
-            deployment.endpointUrl = endpointUrl;
-            deployment.appName = appName;
-            deployment.status = 'running';
-            deployment.endpointStatus = 'live';
-            await orchestrator.saveDeploymentRecord(deployment);
-
-            const modalTime = Date.now() - modalDeployStartTime;
-            logger.info(
-              `✓ Persistent Modal endpoint deployed in ${modalTime}ms: ${endpointUrl}`,
-            );
-          } catch (error) {
-            modalDeploymentError = error instanceof Error ? error.message : 'Unknown error';
-            logger.warn(
-              `Persistent Modal deployment failed: ${modalDeploymentError}`,
-              {
-                deploymentId,
-                blueprintFramework: blueprintJson.framework?.framework,
-                hasModalTokens: !!(config.modal_token_id && config.modal_token_secret),
-                error: modalDeploymentError,
-              },
-            );
-            deployment.status = 'deploying';
-            deployment.endpointStatus = 'failed';
-            deployment.error = modalDeploymentError;
-            await orchestrator.saveDeploymentRecord(deployment);
-          }
-        } else {
-          deployment.endpointStatus = 'pending';
-          await orchestrator.saveDeploymentRecord(deployment);
+          const deployTime = Date.now() - startTime;
+          logger.info(
+            `✓ Persistent Modal endpoint deployed in ${deployTime}ms: ${endpointUrl}`,
+          );
+        } catch (error) {
+          modalError = error instanceof Error ? error.message : 'Unknown error';
+          logger.error(`Modal deploy failed: ${modalError}`, {
+            deploymentId,
+            blueprintFramework: blueprintJson.framework?.framework,
+            hasModalTokens: !!(config.modal_token_id && config.modal_token_secret),
+          });
         }
 
-        const deploymentResponse: Record<string, unknown> = {
-          success: true,
+        // Store in Redis via orchestrator
+        const deployment = {
           deploymentId,
-          agentId: agentIdRef.value,
-          workerId,
-          status: endpointUrl ? 'running' : 'deploying',
+          status: endpointUrl ? 'running' : 'failed',
+          endpointUrl,
+          appName,
           createdAt: Date.now(),
-          estimatedTime: totalTime,
-          endpoint_status: modalDeploymentError ? 'failed' : endpointUrl ? 'live' : 'pending',
-        };
+        } as any;
 
-        // Only include endpoint_url if Modal deployment succeeded
-        if (endpointUrl) {
-          deploymentResponse.endpoint_url = endpointUrl;
-          deploymentResponse.app_name = appName;
-        }
+        await orchestrator.saveDeploymentRecord(deployment);
 
-        // Include error message if Modal deployment failed
-        if (modalDeploymentError) {
-          deploymentResponse.modal_deployment_error = modalDeploymentError;
-        }
-
-        return reply.code(201).send(deploymentResponse);
+        return reply.code(endpointUrl ? 201 : 500).send({
+          success: !!endpointUrl,
+          deploymentId,
+          status: endpointUrl ? 'running' : 'failed',
+          endpoint_url: endpointUrl,
+          app_name: appName,
+          modal_deployment_error: modalError,
+          createdAt: Date.now(),
+          deploymentTime: Date.now() - startTime,
+        });
       } catch (error) {
         const err = error instanceof DeploymentError ? error : new DeploymentError(
           error instanceof Error ? error.message : 'Internal server error',
