@@ -88,6 +88,14 @@ class ModalGPUProviderAdapter implements GPUProvider {
     return this.modal.healthCheck();
   }
 
+  async deployPersistentApp(deploymentId: string, blueprint: any): Promise<{ endpointUrl: string; appName: string }> {
+    return await this.modal.deployPersistentApp(deploymentId, blueprint);
+  }
+
+  async stopPersistentApp(deploymentId: string): Promise<void> {
+    return await this.modal.stopPersistentApp(deploymentId);
+  }
+
   getModal(): ModalProvider {
     return this.modal;
   }
