@@ -321,6 +321,8 @@ export async function deploymentRoutes(
             status: deployment.status,
             startTime: deployment.startTime,
             latency: Date.now() - startTime,
+            endpointUrl: deployment.endpointUrl,
+            appName: deployment.appName,
           });
         }
 
@@ -336,6 +338,8 @@ export async function deploymentRoutes(
           startTime: agentStatus.startTime,
           latency: responseTime,
           gpuUtilization: agentStatus.gpuUtilization,
+          endpointUrl: deployment.endpointUrl,
+          appName: deployment.appName,
           error: agentStatus.error,
         });
       } catch (error) {

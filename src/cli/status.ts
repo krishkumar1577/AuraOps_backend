@@ -11,6 +11,8 @@ interface StatusResult {
   startTime: number;
   latency: number;
   gpuUtilization?: number;
+  endpointUrl?: string;
+  appName?: string;
   error?: string;
 }
 
@@ -49,6 +51,14 @@ async function runStatus(deploymentId: string, options: { token?: string }): Pro
   ui.label('Status', `${statusColor}${result.status}\x1b[0m`);
   ui.label('Agent ID', result.agentId);
   ui.label('Worker ID', result.workerId);
+
+  if (result.endpointUrl) {
+    ui.label('Endpoint URL', result.endpointUrl);
+  }
+
+  if (result.appName) {
+    ui.label('App Name', result.appName);
+  }
 
   if (result.startTime) {
     const uptime = Date.now() - result.startTime;
