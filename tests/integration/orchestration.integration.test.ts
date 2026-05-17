@@ -154,6 +154,7 @@ class MockGPUProvider implements GPUProvider {
       gpuMemoryGB: 40,
       availableGPUMemory: requirements.minGPUMemory + 10,
       provider: this.name,
+      secureRuntimeActive: true,
     };
 
     this.workers.set(workerId, worker);
@@ -230,6 +231,7 @@ describe('Phase 4: GPU Deployment Orchestration Integration', () => {
       cuDNNVersion: '8.9.0',
       baseImageId: 'pytorch/pytorch',
       baseImageTag: '2.1.0-cuda12.1-runtime-ubuntu22.04',
+      systemPackages: ['git', 'build-essential'],
     },
     customModels: [],
     deploymentConfig: {

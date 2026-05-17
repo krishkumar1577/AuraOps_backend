@@ -3,6 +3,8 @@ import { DeploymentError } from '../../../utils/errors';
 import { logger } from '../../../utils/logger';
 import type { GPUAcquisitionSpec, GPUInstance, WorkerInstance } from '../../../types/orchestration.types';
 import { BaseGPUProvider } from './baseProvider';
+import { ModalAppDeployer } from '../modalAppDeployer';
+import type { BlueprintJSON } from '../../../types/blueprint.types';
 
 const GPU_MEMORY_MAP: Record<string, number> = {
   T4: 16,
@@ -44,11 +46,19 @@ interface ActiveSandbox {
   createdAt: number;
 }
 
+interface DeployedApp {
+  deploymentId: string;
+  appName: string;
+  endpointUrl: string;
+  deployedAt: number;
+}
+
 export class ModalProvider extends BaseGPUProvider {
   name = 'Modal';
   private client: ModalClient | null = null;
   private app: App | null = null;
   private activeSandboxes: Map<string, ActiveSandbox> = new Map();
+  private deployedApps: Map<string, DeployedApp> = new Map();
 
   async validateConnection(): Promise<void> {
     const start = Date.now();
@@ -179,6 +189,94 @@ export class ModalProvider extends BaseGPUProvider {
 
   getActiveSandboxCount(): number {
     return this.activeSandboxes.size;
+  }
+
+  /**
+   * Deploy a persistent Modal app with live HTTPS endpoint
+   */
+  async deployPersistentApp(
+    deploymentId: string,
+    blueprint: BlueprintJSON,
+  ): Promise<{ endpointUrl: string; appName: string }> {
+    const start = Date.now();
+
+    try {
+      this.requireConnection();
+
+      logger.info(
+        `Deploying persistent Modal app: deploymentId=${deploymentId}, framework=${blueprint.framework.framework}`,
+      );
+
+      // Step 1: Generate modal_app.py
+      const appContent = ModalAppDeployer.generateModalApp(blueprint, deploymentId);
+
+      // Step 2: Write to temporary file
+      const appPath = await ModalAppDeployer.writeModalApp(appContent, deploymentId);
+
+      // Step 3: Deploy and get endpoint URL
+      const endpointUrl = await ModalAppDeployer.deployApp(appPath, deploymentId);
+
+      // Step 4: Store deployment record
+      const appName = `auraops-${deploymentId}`;
+      this.deployedApps.set(deploymentId, {
+        deploymentId,
+        appName,
+        endpointUrl,
+        deployedAt: Date.now(),
+      });
+
+      logger.info(
+        `✓ Modal app deployed in ${Date.now() - start}ms: ${endpointUrl}`,
+      );
+
+      return {
+        endpointUrl,
+        appName,
+      };
+    } catch (error) {
+      if (error instanceof DeploymentError) throw error;
+      throw new DeploymentError('Modal: Persistent app deployment failed', {
+        cause: error instanceof Error ? error.message : String(error),
+        deploymentId,
+      });
+    }
+  }
+
+  /**
+   * Get endpoint URL for deployed app
+   */
+  getDeployedAppUrl(deploymentId: string): string | null {
+    const deployed = this.deployedApps.get(deploymentId);
+    return deployed ? deployed.endpointUrl : null;
+  }
+
+  /**
+   * Stop a persistent Modal app
+   */
+  async stopPersistentApp(deploymentId: string): Promise<void> {
+    try {
+      this.requireConnection();
+
+      const deployed = this.deployedApps.get(deploymentId);
+      if (!deployed) {
+        throw new DeploymentError(`Modal app not found: ${deploymentId}`);
+      }
+
+      await ModalAppDeployer.stopApp(deploymentId);
+      this.deployedApps.delete(deploymentId);
+
+      logger.info(`Modal app stopped: ${deploymentId}`);
+    } catch (error) {
+      if (error instanceof DeploymentError) throw error;
+      throw new DeploymentError('Modal: Failed to stop app', {
+        cause: error instanceof Error ? error.message : String(error),
+        deploymentId,
+      });
+    }
+  }
+
+  getDeployedAppCount(): number {
+    return this.deployedApps.size;
   }
 
   close(): void {

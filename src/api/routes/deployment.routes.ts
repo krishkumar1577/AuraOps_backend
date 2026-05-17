@@ -52,6 +52,8 @@ interface DeploymentRecord {
   lockfilePath: string;
   environmentHash: string;
   error?: string;
+  endpointUrl?: string;
+  appName?: string;
 }
 
 export async function deploymentRoutes(
@@ -206,6 +208,40 @@ export async function deploymentRoutes(
           `✓ Deployment recorded in ${Date.now() - startTime}ms: deploymentId=${deploymentId}`,
         );
 
+        // Try to deploy persistent Modal app if provider is Modal
+        let endpointUrl: string | undefined;
+        let appName: string | undefined;
+
+        if (
+          gpuRequirements.framework === 'modal' ||
+          blueprintJson.framework.framework === 'langchain'
+        ) {
+          try {
+            const modalDeployStartTime = Date.now();
+            const modalResult = await orchestrator.deployPersistentModal(
+              deploymentId,
+              blueprintJson as BlueprintJSON,
+            );
+
+            endpointUrl = modalResult.endpointUrl;
+            appName = modalResult.appName;
+
+            deployment.endpointUrl = endpointUrl;
+            deployment.appName = appName;
+            deployments.set(deploymentId, deployment);
+
+            const modalTime = Date.now() - modalDeployStartTime;
+            logger.info(
+              `✓ Persistent Modal endpoint deployed in ${modalTime}ms: ${endpointUrl}`,
+            );
+          } catch (error) {
+            logger.warn(
+              `Persistent Modal deployment skipped: ${error instanceof Error ? error.message : 'unknown error'}`,
+            );
+            // Don't fail the deployment if Modal app fails - regular deployment still works
+          }
+        }
+
         return reply.code(201).send({
           success: true,
           deploymentId,
@@ -214,6 +250,7 @@ export async function deploymentRoutes(
           status: 'running',
           createdAt: Date.now(),
           estimatedTime: totalTime,
+          ...(endpointUrl && { endpoint_url: endpointUrl, app_name: appName }),
         });
       } catch (error) {
         const err = error instanceof DeploymentError ? error : new DeploymentError(
@@ -522,6 +559,90 @@ export async function deploymentRoutes(
         );
 
         logger.error(`List agents error: ${err.message}`);
+        return reply.code(err.statusCode || 500).send({
+          success: false,
+          error: err.message,
+        });
+      }
+    },
+  );
+
+  /**
+   * DELETE /api/v1/deployment/:deploymentId/stop-modal
+   * Stop a persistent Modal app deployment
+   */
+  fastify.delete<{ Params: unknown }>(
+    '/api/v1/deployment/:deploymentId/stop-modal',
+    async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      try {
+        const params = request.params as Record<string, string>;
+        const { deploymentId } = DeploymentIdParamSchema.parse(params);
+
+        const deployment = deployments.get(deploymentId);
+        if (!deployment) {
+          logger.warn(`Deployment not found: ${deploymentId}`);
+          return reply.code(404).send({
+            success: false,
+            error: 'Deployment not found',
+            deploymentId,
+          });
+        }
+
+        if (!deployment.appName) {
+          logger.warn(`No Modal app found for deployment: ${deploymentId}`);
+          return reply.code(400).send({
+            success: false,
+            error: 'No Modal app deployed for this deployment',
+            deploymentId,
+          });
+        }
+
+        // Stop the persistent Modal app
+        const startTime = Date.now();
+        try {
+          await orchestrator.stopPersistentModal(deploymentId);
+
+          deployment.endpointUrl = undefined;
+          deployment.appName = undefined;
+          deployments.set(deploymentId, deployment);
+
+          const stopTime = Date.now() - startTime;
+          logger.info(`✓ Modal app stopped in ${stopTime}ms: ${deploymentId}`);
+
+          return reply.code(200).send({
+            success: true,
+            deploymentId,
+            message: 'Modal app stopped successfully',
+            stoppedAt: Date.now(),
+          });
+        } catch (error) {
+          const err = error instanceof DeploymentError ? error : new DeploymentError(
+            error instanceof Error ? error.message : 'Failed to stop Modal app',
+            { deploymentId },
+          );
+
+          logger.error(`Failed to stop Modal app: ${err.message}`);
+          return reply.code(err.statusCode || 500).send({
+            success: false,
+            error: err.message,
+            deploymentId,
+          });
+        }
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          logger.warn(`Validation error: ${error.message}`);
+          return reply.code(400).send({
+            success: false,
+            error: 'Invalid parameters',
+            details: error.errors,
+          });
+        }
+
+        const err = error instanceof DeploymentError ? error : new DeploymentError(
+          error instanceof Error ? error.message : 'Internal server error',
+        );
+
+        logger.error(`Stop Modal error: ${err.message}`);
         return reply.code(err.statusCode || 500).send({
           success: false,
           error: err.message,

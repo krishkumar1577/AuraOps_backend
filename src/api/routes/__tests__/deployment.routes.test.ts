@@ -89,6 +89,7 @@ describe('Deployment API Routes', () => {
         gpuMemoryGB: 16,
         availableGPUMemory: 14,
         provider: 'lambda-labs',
+        secureRuntimeActive: true,
       };
 
       const mockAgent = {
@@ -261,6 +262,7 @@ describe('Deployment API Routes', () => {
         gpuMemoryGB: 16,
         availableGPUMemory: 14,
         provider: 'lambda-labs',
+        secureRuntimeActive: true,
       };
 
       mockOrchestrator.acquireWorker.mockResolvedValue(mockWorker);
@@ -359,6 +361,7 @@ describe('Deployment API Routes', () => {
         gpuMemoryGB: 16,
         availableGPUMemory: 14,
         provider: 'lambda-labs',
+        secureRuntimeActive: true,
       };
 
       mockOrchestrator.acquireWorker.mockResolvedValue(mockWorker);
@@ -423,6 +426,7 @@ describe('Deployment API Routes', () => {
         gpuMemoryGB: 16,
         availableGPUMemory: 14,
         provider: 'lambda-labs',
+        secureRuntimeActive: true,
       };
 
       mockOrchestrator.acquireWorker.mockResolvedValue(mockWorker);
@@ -475,6 +479,7 @@ describe('Deployment API Routes', () => {
         startTime: Date.now() - 5000,
         containerImage: 'auraops/pytorch:cuda12.1-py3.10',
         gpuUtilization: 85,
+        lastActivityAt: Date.now(),
       };
 
       mockOrchestrator.getDeploymentStatus.mockResolvedValue(mockStatus);
@@ -536,6 +541,7 @@ describe('Deployment API Routes', () => {
         startTime: Date.now() - 10000,
         containerImage: 'auraops/pytorch:cuda12.1-py3.10',
         gpuUtilization: 92,
+        lastActivityAt: Date.now(),
       };
 
       mockOrchestrator.getDeploymentStatus.mockResolvedValue(mockStatus);
@@ -571,6 +577,7 @@ describe('Deployment API Routes', () => {
         gpuMemoryGB: 16,
         availableGPUMemory: 14,
         provider: 'lambda-labs',
+        secureRuntimeActive: true,
       };
 
       mockOrchestrator.acquireWorker.mockResolvedValue(mockWorker);
@@ -701,6 +708,7 @@ describe('Deployment API Routes', () => {
           startTime: Date.now() - 10000,
           containerImage: 'pytorch:2.1',
           gpuUtilization: 85,
+          lastActivityAt: Date.now(),
         },
         {
           agentId: 'agent-2',
@@ -709,6 +717,7 @@ describe('Deployment API Routes', () => {
           startTime: Date.now() - 5000,
           containerImage: 'pytorch:2.1',
           gpuUtilization: 92,
+          lastActivityAt: Date.now(),
         },
       ];
 
@@ -766,6 +775,7 @@ describe('Deployment API Routes', () => {
           startTime: Date.now() - 10000,
           containerImage: 'pytorch:2.1',
           gpuUtilization: 87,
+          lastActivityAt: Date.now(),
         },
       ];
 
@@ -796,6 +806,7 @@ describe('Deployment API Routes', () => {
           startTime,
           containerImage: 'pytorch:2.1',
           gpuUtilization: 85,
+          lastActivityAt: Date.now(),
         },
       ];
 
@@ -958,6 +969,7 @@ describe('Deployment API Routes', () => {
         gpuMemoryGB: 16,
         availableGPUMemory: 14,
         provider: 'lambda-labs',
+        secureRuntimeActive: true,
       };
 
       mockOrchestrator.acquireWorker.mockResolvedValue(mockWorker);
@@ -1012,6 +1024,7 @@ describe('Deployment API Routes', () => {
         startTime: Date.now() - 5000,
         containerImage: 'auraops/pytorch:cuda12.1-py3.10',
         gpuUtilization: 85,
+        lastActivityAt: Date.now(),
       });
 
       const request = {
@@ -1053,6 +1066,7 @@ describe('Deployment API Routes', () => {
         gpuMemoryGB: 16,
         availableGPUMemory: 14,
         provider: 'lambda-labs',
+        secureRuntimeActive: true,
       };
 
       mockOrchestrator.acquireWorker.mockResolvedValue(mockWorker);

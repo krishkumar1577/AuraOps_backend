@@ -73,6 +73,7 @@ class MockGPUProvider implements GPUProvider {
       gpuMemoryGB: 16,
       availableGPUMemory: 16, // Always 16GB available, don't decrease
       provider: name,
+      secureRuntimeActive: true,
     }));
   }
 
@@ -126,6 +127,7 @@ function createBlueprintFixture(overrides?: Partial<BlueprintJSON>): BlueprintJS
       cuDNNVersion: '8.7',
       baseImageId: 'nvidia/cuda',
       baseImageTag: '12.1-runtime-ubuntu22.04',
+      systemPackages: ['build-essential', 'git'],
     },
     customModels: [],
     deploymentConfig: {

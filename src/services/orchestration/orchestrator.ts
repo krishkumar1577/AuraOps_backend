@@ -410,6 +410,82 @@ export class Orchestrator {
     }
   }
 
+  async deployPersistentModal(
+    deploymentId: string,
+    blueprint: BlueprintJSON,
+  ): Promise<{ endpointUrl: string; appName: string; deploymentTime: number }> {
+    const start = Date.now();
+
+    try {
+      await this.ensureConnected();
+
+      logger.info(
+        `Deploying persistent Modal app: deploymentId=${deploymentId}, framework=${blueprint.framework.framework}`,
+      );
+
+      // Find Modal provider
+      let modalProvider: any | null = null;
+      for (const provider of this.providers) {
+        if (provider.name === 'Modal' && 'deployPersistentApp' in provider) {
+          modalProvider = provider;
+          break;
+        }
+      }
+
+      if (!modalProvider) {
+        throw new DeploymentError('Modal provider not available');
+      }
+
+      // Deploy the persistent app
+      const result = await modalProvider.deployPersistentApp(deploymentId, blueprint);
+
+      const deploymentTime = Date.now() - start;
+      logger.info(`✓ Persistent Modal app deployed in ${deploymentTime}ms: ${result.endpointUrl}`);
+
+      return {
+        ...result,
+        deploymentTime,
+      };
+    } catch (error: unknown) {
+      throw this.toDeploymentError(
+        'Failed to deploy persistent Modal app',
+        { deploymentId },
+        error,
+      );
+    }
+  }
+
+  async stopPersistentModal(deploymentId: string): Promise<void> {
+    const start = Date.now();
+
+    try {
+      await this.ensureConnected();
+
+      // Find Modal provider
+      let modalProvider: any | null = null;
+      for (const provider of this.providers) {
+        if (provider.name === 'Modal' && 'stopPersistentApp' in provider) {
+          modalProvider = provider;
+          break;
+        }
+      }
+
+      if (!modalProvider) {
+        throw new DeploymentError('Modal provider not available');
+      }
+
+      await modalProvider.stopPersistentApp(deploymentId);
+
+      logger.info(`✓ Persistent Modal app stopped in ${Date.now() - start}ms: ${deploymentId}`);
+    } catch (error: unknown) {
+      throw this.toDeploymentError(
+        'Failed to stop persistent Modal app',
+        { deploymentId },
+        error,
+      );
+    }
+  }
+
   private deploymentKey(agentId: string): string {
     return `${DEPLOYMENT_STATE_PREFIX}${agentId}`;
   }
