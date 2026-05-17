@@ -1,6 +1,7 @@
 import { ModalClient, Sandbox, App } from 'modal';
 import { DeploymentError } from '../../../utils/errors';
 import { logger } from '../../../utils/logger';
+import { config } from '../../../utils/config';
 import type { GPUAcquisitionSpec, GPUInstance, WorkerInstance } from '../../../types/orchestration.types';
 import { BaseGPUProvider } from './baseProvider';
 import { ModalAppDeployer } from '../modalAppDeployer';
@@ -201,7 +202,12 @@ export class ModalProvider extends BaseGPUProvider {
     const start = Date.now();
 
     try {
-      this.requireConnection();
+      if (!this.connected) {
+        await this.connect({
+          token_id: config.modal_token_id,
+          token_secret: config.modal_token_secret,
+        });
+      }
 
       // VALIDATION: Check blueprint has all required fields
       if (!blueprint) {

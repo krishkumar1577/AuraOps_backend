@@ -228,6 +228,12 @@ export async function deploymentRoutes(
             modalDeploymentError = error instanceof Error ? error.message : 'Unknown error';
             logger.warn(
               `Persistent Modal deployment failed: ${modalDeploymentError}`,
+              {
+                deploymentId,
+                blueprintFramework: blueprintJson.framework?.framework,
+                hasModalTokens: !!(config.modal_token_id && config.modal_token_secret),
+                error: modalDeploymentError,
+              },
             );
             deployment.status = 'deploying';
             deployment.endpointStatus = 'failed';
