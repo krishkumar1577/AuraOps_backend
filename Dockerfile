@@ -15,12 +15,17 @@ RUN modal --version
 
 WORKDIR /app
 
-# Install Node dependencies
+# Install ALL dependencies (including dev for build)
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 
-# Copy built source
-COPY dist/ ./dist/
+# Copy source and compile TypeScript
+COPY tsconfig.json ./
+COPY src/ ./src/
+RUN npm run build
+
+# Remove dev dependencies after build
+RUN npm prune --omit=dev
 
 # Start server
 CMD ["node", "dist/index.js"]
