@@ -245,6 +245,7 @@ export class ModalProvider extends BaseGPUProvider {
 
       // Step 1: Generate modal_app.py
       const appContent = ModalAppDeployer.generateModalApp(blueprint, deploymentId);
+      logger.info(`Generated modal_app.py content:\n${appContent}`);
 
       // Step 2: Write to temporary file
       const appPath = await ModalAppDeployer.writeModalApp(appContent, deploymentId);
