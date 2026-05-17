@@ -211,6 +211,7 @@ export async function deploymentRoutes(
         // Try to deploy persistent Modal app if provider is Modal
         let endpointUrl: string | undefined;
         let appName: string | undefined;
+        let modalDeploymentError: string | undefined;
 
         if (
           gpuRequirements.framework === 'modal' ||
@@ -235,14 +236,15 @@ export async function deploymentRoutes(
               `✓ Persistent Modal endpoint deployed in ${modalTime}ms: ${endpointUrl}`,
             );
           } catch (error) {
+            modalDeploymentError = error instanceof Error ? error.message : 'Unknown error';
             logger.warn(
-              `Persistent Modal deployment skipped: ${error instanceof Error ? error.message : 'unknown error'}`,
+              `Persistent Modal deployment failed: ${modalDeploymentError}`,
             );
             // Don't fail the deployment if Modal app fails - regular deployment still works
           }
         }
 
-        return reply.code(201).send({
+        const deploymentResponse: Record<string, unknown> = {
           success: true,
           deploymentId,
           agentId: agentIdRef.value,
@@ -250,8 +252,20 @@ export async function deploymentRoutes(
           status: 'running',
           createdAt: Date.now(),
           estimatedTime: totalTime,
-          ...(endpointUrl && { endpoint_url: endpointUrl, app_name: appName }),
-        });
+        };
+
+        // Only include endpoint_url if Modal deployment succeeded
+        if (endpointUrl) {
+          deploymentResponse.endpoint_url = endpointUrl;
+          deploymentResponse.app_name = appName;
+        }
+
+        // Include error message if Modal deployment failed
+        if (modalDeploymentError) {
+          deploymentResponse.modal_deployment_error = modalDeploymentError;
+        }
+
+        return reply.code(201).send(deploymentResponse);
       } catch (error) {
         const err = error instanceof DeploymentError ? error : new DeploymentError(
           error instanceof Error ? error.message : 'Internal server error',

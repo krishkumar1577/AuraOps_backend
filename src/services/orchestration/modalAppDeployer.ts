@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { config } from '../../utils/config';
 import { DeploymentError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import type { BlueprintJSON } from '../../types/blueprint.types';
@@ -279,7 +280,7 @@ ${indent}    })()`;
   }
 
   /**
-   * Write modal_app.py to temporary directory
+   * Write modal_app.py to temporary directory with unique name
    */
   static async writeModalApp(
     content: string,
@@ -288,7 +289,7 @@ ${indent}    })()`;
     const tmpDir = path.join('/tmp', `auraops-${deploymentId}`);
     await fs.mkdir(tmpDir, { recursive: true });
 
-    const appPath = path.join(tmpDir, 'modal_app.py');
+    const appPath = path.join(tmpDir, `modal_app_${deploymentId}.py`);
     await fs.writeFile(appPath, content, 'utf-8');
 
     logger.info(`Modal app written to ${appPath}`);
@@ -304,12 +305,33 @@ ${indent}    })()`;
     return new Promise((resolve, reject) => {
       let stdout = '';
       let stderr = '';
+      let timedOut = false;
 
       logger.info(`Deploying Modal app from ${appPath}`);
 
+      // Set 120s timeout
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        proc.kill('SIGTERM');
+        logger.error('Modal deploy timeout after 120s');
+        reject(
+          new DeploymentError('Modal deployment timeout after 120s', {
+            deploymentId,
+            stdout,
+            stderr,
+          }),
+        );
+      }, 120000);
+
+      // Pass Modal auth tokens and inherited env to child process
       const proc = spawn('modal', ['deploy', appPath], {
         cwd: path.dirname(appPath),
         stdio: 'pipe',
+        env: {
+          ...process.env,
+          MODAL_TOKEN_ID: config.modal_token_id,
+          MODAL_TOKEN_SECRET: config.modal_token_secret,
+        },
       });
 
       proc.stdout!.on('data', (data: Buffer) => {
@@ -325,6 +347,9 @@ ${indent}    })()`;
       });
 
       proc.on('close', (code: number) => {
+        if (timedOut) return;
+        clearTimeout(timeout);
+
         const deployTime = Date.now() - start;
 
         if (code !== 0) {
@@ -343,7 +368,7 @@ ${indent}    })()`;
 
         // Extract HTTPS URL from Modal deploy output
         // Format: "https://{workspace}--auraops-{id}.modal.run"
-        const urlMatch = stdout.match(/https:\/\/[^\s]+\.modal\.run/);
+        const urlMatch = stdout.match(/https:\/\/[\w-]+--auraops-[\w-]+\.modal\.run/);
         if (!urlMatch) {
           logger.warn(
             `Could not find HTTPS URL in Modal output. Full output:\n${stdout}`,
@@ -363,6 +388,9 @@ ${indent}    })()`;
       });
 
       proc.on('error', (error: Error) => {
+        if (timedOut) return;
+        clearTimeout(timeout);
+
         logger.error(`Modal deploy process error: ${error.message}`);
         reject(
           new DeploymentError('Modal deployment process error', {
