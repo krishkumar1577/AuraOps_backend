@@ -190,7 +190,7 @@ if __name__ == "__main__":
     }
     return Object.entries(dependencyLock)
       .map(([pkg, version]) => `"${pkg}${version ? `==${version}` : ''}"`)
-      .join(', \\n        ');
+      .join(',\n        ');
   }
 
   /**
