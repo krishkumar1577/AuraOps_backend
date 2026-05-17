@@ -203,6 +203,36 @@ export class ModalProvider extends BaseGPUProvider {
     try {
       this.requireConnection();
 
+      // VALIDATION: Check blueprint has all required fields
+      if (!blueprint) {
+        throw new DeploymentError('Invalid blueprint: blueprint is null/undefined', { deploymentId });
+      }
+
+      if (!blueprint.framework?.framework) {
+        logger.error('Blueprint validation failed: missing framework', {
+          deploymentId,
+          blueprint: JSON.stringify(blueprint, null, 2),
+        });
+        throw new DeploymentError('Invalid blueprint: missing framework.framework', { deploymentId });
+      }
+
+      if (!blueprint.deploymentConfig?.gpuMemoryGB) {
+        logger.error('Blueprint validation failed: missing deploymentConfig.gpuMemoryGB', {
+          deploymentId,
+          deploymentConfig: JSON.stringify(blueprint.deploymentConfig),
+        });
+        throw new DeploymentError('Invalid blueprint: missing deploymentConfig.gpuMemoryGB', { deploymentId });
+      }
+
+      // Log the blueprint for debugging
+      logger.info(`Blueprint received for Modal deployment:`, {
+        deploymentId,
+        framework: blueprint.framework.framework,
+        gpuMemory: blueprint.deploymentConfig.gpuMemoryGB,
+        hasDependencyLock: !!blueprint.dependencyLock,
+        dependencyLockSize: blueprint.dependencyLock ? Object.keys(blueprint.dependencyLock).length : 0,
+      });
+
       logger.info(
         `Deploying persistent Modal app: deploymentId=${deploymentId}, framework=${blueprint.framework.framework}`,
       );

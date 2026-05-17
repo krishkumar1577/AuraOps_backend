@@ -18,14 +18,21 @@ export class ModalAppDeployer {
     blueprint: BlueprintJSON,
     deploymentId: string,
   ): string {
-    const dependencies = this.formatDependencies(blueprint.dependencyLock);
-    const gpuConfig = this.selectGPU(blueprint.deploymentConfig?.gpuMemoryGB || 24);
-    const loaderCode = this.generateFrameworkLoader(
-      blueprint.framework?.framework || 'langchain',
-      blueprint.customModels,
-    );
+    try {
+      // Validate and log all inputs
+      if (!blueprint) throw new Error('blueprint is null/undefined');
+      if (!blueprint.dependencyLock) logger.warn('generateModalApp: dependencyLock is missing');
+      if (!blueprint.deploymentConfig) logger.warn('generateModalApp: deploymentConfig is missing');
+      if (!blueprint.framework) logger.warn('generateModalApp: framework is missing');
 
-    return `
+      const dependencies = this.formatDependencies(blueprint.dependencyLock);
+      const gpuConfig = this.selectGPU(blueprint.deploymentConfig?.gpuMemoryGB || 24);
+      const loaderCode = this.generateFrameworkLoader(
+        blueprint.framework?.framework || 'langchain',
+        blueprint.customModels,
+      );
+
+      return `
 #!/usr/bin/env python3
 """
 AuraOps Modal App
@@ -167,6 +174,15 @@ if __name__ == "__main__":
     print("Modal app configured for AuraOps deployment ${deploymentId}")
     print("Deploy with: modal deploy modalapp.py")
 `;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error(`Failed to generate Modal app: ${errorMsg}`, {
+        deploymentId,
+        blueprint: JSON.stringify(blueprint, null, 2),
+        error: errorMsg,
+      });
+      throw new Error(`generateModalApp failed: ${errorMsg}`);
+    }
   }
 
   /**
