@@ -16,7 +16,6 @@ describe('ModalAppDeployer', () => {
       'langchain': '0.1.0',
       'torch': '2.1.0',
       'transformers': '4.30.0',
-      'pydantic': '2.0.0',
     },
     systemRequirements: {
       pythonVersion: '3.11',
@@ -49,9 +48,10 @@ describe('ModalAppDeployer', () => {
       expect(code).toContain('@modal.enter()');
       expect(code).toContain('@modal.fastapi_endpoint');
       expect(code).toContain('def load(self)');
-      expect(code).toContain('def endpoint(self, request: InferenceRequest)');
-      expect(code).toContain('class InferenceRequest');
-      expect(code).toContain('class InferenceResponse');
+      expect(code).toContain('def endpoint(self, request: Dict[str, Any])');
+      expect(code).toContain('Dict[str, Any]');
+      expect(code).not.toContain('class InferenceRequest');
+      expect(code).not.toContain('class InferenceResponse');
     });
 
     it('should include LangChain loader code', () => {
@@ -67,13 +67,13 @@ describe('ModalAppDeployer', () => {
       expect(code).toContain('"langchain==0.1.0"');
       expect(code).toContain('"torch==2.1.0"');
       expect(code).toContain('"transformers==4.30.0"');
-      expect(code).toContain('"pydantic==2.0.0"');
+      expect(code).not.toContain('pydantic');
     });
 
     it('should select L4 GPU for 16GB requirement', () => {
       const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_test123');
 
-      expect(code).toContain('modal.gpu.L4()');
+      expect(code).toContain('gpu="L4"');
     });
 
     it('should generate code for PyTorch/Transformers', () => {
@@ -132,7 +132,7 @@ describe('ModalAppDeployer', () => {
 
       const code = ModalAppDeployer.generateModalApp(smallBlueprint, 'dep_small123');
 
-      expect(code).toContain('modal.gpu.T4()');
+      expect(code).toContain('gpu="T4"');
     });
 
     it('should select A100 GPU for >24GB requirement', () => {
@@ -146,7 +146,7 @@ describe('ModalAppDeployer', () => {
 
       const code = ModalAppDeployer.generateModalApp(largeBlueprint, 'dep_large123');
 
-      expect(code).toContain('modal.gpu.A100()');
+      expect(code).toContain('gpu="A100"');
     });
 
     it('should include deployment ID in app name', () => {
@@ -156,15 +156,12 @@ describe('ModalAppDeployer', () => {
       expect(code).toContain('Deployment ID: dep_abc123xyz');
     });
 
-    it('should include InferenceRequest and InferenceResponse schemas', () => {
+    it('should include response format', () => {
       const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_test123');
 
-      expect(code).toContain('class InferenceRequest(BaseModel):');
-      expect(code).toContain('input: str');
-      expect(code).toContain('class InferenceResponse(BaseModel):');
-      expect(code).toContain('output: str');
-      expect(code).toContain('deployment_id: str');
-      expect(code).toContain('processing_time_ms: float');
+      expect(code).toContain('"output": output');
+      expect(code).toContain('"deployment_id"');
+      expect(code).toContain('"processing_time_ms": processing_time');
     });
 
     it('should include health check endpoint', () => {
@@ -195,11 +192,11 @@ describe('ModalAppDeployer', () => {
 
   describe('GPU selection', () => {
     const gpuTests = [
-      { memory: 8, expected: 'modal.gpu.T4()' },
-      { memory: 16, expected: 'modal.gpu.L4()' },
-      { memory: 24, expected: 'modal.gpu.A10G()' },
-      { memory: 40, expected: 'modal.gpu.A100()' },
-      { memory: 80, expected: 'modal.gpu.A100(count=2)' },
+      { memory: 8, expected: 'gpu="T4"' },
+      { memory: 16, expected: 'gpu="L4"' },
+      { memory: 24, expected: 'gpu="A10G"' },
+      { memory: 40, expected: 'gpu="A100"' },
+      { memory: 80, expected: 'gpu="A100"' },
     ];
 
     gpuTests.forEach(({ memory, expected }) => {

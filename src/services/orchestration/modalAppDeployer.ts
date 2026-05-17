@@ -43,7 +43,6 @@ Deployment ID: ${deploymentId}
 import modal
 import json
 from typing import Dict, Any
-from pydantic import BaseModel, Field
 
 # Initialize Modal app
 app = modal.App("auraops-${deploymentId}")
@@ -51,21 +50,8 @@ app = modal.App("auraops-${deploymentId}")
 # Build Docker image from dependencies
 image = modal.Image.debian_slim() \\
     .pip_install([
-        ${dependencies}
+       ${dependencies}
     ])
-
-# Request/Response schemas
-class InferenceRequest(BaseModel):
-    """Inference request schema"""
-    input: str = Field(..., description="Input text or prompt")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Optional metadata")
-
-class InferenceResponse(BaseModel):
-    """Inference response schema"""
-    output: str
-    deployment_id: str = "${deploymentId}"
-    processing_time_ms: float
-    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 # Agent class with persistent load
 @app.cls(
@@ -104,22 +90,24 @@ ${loaderCode}
         print("✓ Agent cleanup complete")
 
     @modal.fastapi_endpoint(method="POST")
-    def endpoint(self, request: InferenceRequest) -> InferenceResponse:
+    def endpoint(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """HTTP POST endpoint for inference"""
         import time
         start_time = time.time()
-        
+         
         try:
             # Run inference based on framework
-            output = self._run_inference(request.input, request.metadata)
-            
+            input_text = request.get("input", "")
+            metadata = request.get("metadata", {})
+            output = self._run_inference(input_text, metadata)
+             
             processing_time = (time.time() - start_time) * 1000  # Convert to ms
-            
-            return InferenceResponse(
-                output=output,
-                processing_time_ms=processing_time,
-                metadata={"framework": "${blueprint.framework.framework}"},
-            )
+             
+            return {
+                "output": output,
+                "deployment_id": "${deploymentId}",
+                "processing_time_ms": processing_time,
+            }
         except Exception as e:
             raise RuntimeError(f"Inference failed: {str(e)}")
 
@@ -198,15 +186,15 @@ if __name__ == "__main__":
    */
   private static selectGPU(gpuMemoryGB: number): string {
     if (gpuMemoryGB <= 8) {
-      return 'modal.gpu.T4()';
+      return 'T4';
     } else if (gpuMemoryGB <= 16) {
-      return 'modal.gpu.L4()';
+      return 'L4';
     } else if (gpuMemoryGB <= 24) {
-      return 'modal.gpu.A10G()';
+      return 'A10G';
     } else if (gpuMemoryGB <= 40) {
-      return 'modal.gpu.A100()';
+      return 'A100';
     } else {
-      return 'modal.gpu.A100(count=2)';
+      return 'A100';
     }
   }
 
