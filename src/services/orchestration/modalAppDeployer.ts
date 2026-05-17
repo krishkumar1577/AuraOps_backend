@@ -41,24 +41,20 @@ Deployment ID: ${deploymentId}
 """
 
 import modal
-import json
 from typing import Dict, Any
 
 # Initialize Modal app
 app = modal.App("auraops-${deploymentId}")
 
 # Build Docker image from dependencies
-image = modal.Image.debian_slim() \\
-    .pip_install([
-       ${dependencies}
-    ])
+image = modal.Image.debian_slim().pip_install([${dependencies}])
 
 # Agent class with persistent load
 @app.cls(
     gpu="${gpuConfig}",
     image=image,
     timeout=300,
-    container_idle_timeout=60,
+    scaledown_window=60,
 )
 class AuraOpsAgent:
     """AI Agent for inference"""
@@ -178,7 +174,7 @@ if __name__ == "__main__":
     }
     return Object.entries(dependencyLock)
       .map(([pkg, version]) => `"${pkg}${version ? `==${version}` : ''}"`)
-      .join(',\n        ');
+      .join(', ');
   }
 
   /**
