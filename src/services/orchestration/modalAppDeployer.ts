@@ -19,9 +19,9 @@ export class ModalAppDeployer {
     deploymentId: string,
   ): string {
     const dependencies = this.formatDependencies(blueprint.dependencyLock);
-    const gpuConfig = this.selectGPU(blueprint.deploymentConfig.gpuMemoryGB);
+    const gpuConfig = this.selectGPU(blueprint.deploymentConfig?.gpuMemoryGB || 24);
     const loaderCode = this.generateFrameworkLoader(
-      blueprint.framework.framework,
+      blueprint.framework?.framework || 'langchain',
       blueprint.customModels,
     );
 
@@ -172,7 +172,10 @@ if __name__ == "__main__":
   /**
    * Format dependencies from blueprint.dependencyLock
    */
-  private static formatDependencies(dependencyLock: Record<string, string>): string {
+  private static formatDependencies(dependencyLock?: Record<string, string>): string {
+    if (!dependencyLock || Object.keys(dependencyLock).length === 0) {
+      return '"langchain", "openai"';
+    }
     return Object.entries(dependencyLock)
       .map(([pkg, version]) => `"${pkg}${version ? `==${version}` : ''}"`)
       .join(', \\n        ');
