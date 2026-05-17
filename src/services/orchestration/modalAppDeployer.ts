@@ -321,11 +321,12 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
       }, 120000);
 
       // Pass Modal auth tokens and inherited env to child process
-      const proc = spawn('modal', ['deploy', appPath], {
-        cwd: path.dirname(appPath),
-        stdio: 'pipe',
-        env: {
-          ...process.env,
+      const modalCmd = process.env.MODAL_CLI_PATH || 'modal';
+      const proc = spawn(modalCmd, ['deploy', appPath], {
+       cwd: path.dirname(appPath),
+       stdio: 'pipe',
+       env: {
+         ...process.env,
           MODAL_TOKEN_ID: config.modal_token_id,
           MODAL_TOKEN_SECRET: config.modal_token_secret,
         },

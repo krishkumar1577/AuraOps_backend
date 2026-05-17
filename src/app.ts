@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process';
+import { execSync } from 'child_process';
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -13,18 +13,24 @@ import { logger } from './utils/logger';
 import config from './utils/config';
 
 function logModalCliAvailability(): void {
-  const result = spawnSync('modal', ['--version'], { encoding: 'utf-8' });
+  const paths = [
+    'modal',
+    '/usr/local/bin/modal',
+    `${process.env.HOME}/.local/bin/modal`,
+    '/root/.local/bin/modal',
+  ];
 
-  if (result.status === 0) {
-    const version = result.stdout.trim() || 'unknown';
-    logger.info(`Modal CLI available: ${version}`);
-    return;
+  for (const p of paths) {
+    try {
+      const version = execSync(`${p} --version`, { timeout: 3000, encoding: 'utf-8' }).trim();
+      process.env.MODAL_CLI_PATH = p;
+      logger.info(`Modal CLI found at: ${p}`);
+      logger.info(`Modal CLI available: ${version || 'unknown'}`);
+      break;
+    } catch {
+      continue;
+    }
   }
-
-  const errorMessage = result.error instanceof Error
-    ? result.error.message
-    : result.stderr?.trim() || 'unknown error';
-  logger.warn(`Modal CLI not available: ${errorMessage}`);
 }
 
 export async function createApp(): Promise<FastifyInstance> {
