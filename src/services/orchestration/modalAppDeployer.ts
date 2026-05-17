@@ -59,10 +59,9 @@ image = modal.Image.debian_slim().pip_install([${dependencies}])
 class AuraOpsAgent:
     """AI Agent for inference"""
 
-    def __init__(self):
-        self.agent = None
-        self.model = None
-        self.tokenizer = None
+    agent: Any = None
+    model: Any = None
+    tokenizer: Any = None
 
     @modal.enter()
     def load(self):
@@ -168,13 +167,24 @@ if __name__ == "__main__":
   /**
    * Format dependencies from blueprint.dependencyLock
    */
-  private static formatDependencies(dependencyLock?: Record<string, string>): string {
-    if (!dependencyLock || Object.keys(dependencyLock).length === 0) {
-      return '"langchain", "openai"';
-    }
-    return Object.entries(dependencyLock)
-      .map(([pkg, version]) => `"${pkg}${version ? `==${version}` : ''}"`)
-      .join(', ');
+  private static formatDependencies(
+    dependencyLock?: Record<string, string>,
+  ): string {
+    const required = ['fastapi[standard]'];
+
+    const userDeps = dependencyLock
+      ? Object.entries(dependencyLock).map(
+          ([pkg, version]) =>
+            `"${pkg}${version ? `==${version}` : ''}"`,
+        )
+      : [];
+
+    const allDeps = [
+      ...required.map(d => `"${d}"`),
+      ...userDeps,
+    ];
+
+    return allDeps.join(', ');
   }
 
   /**
