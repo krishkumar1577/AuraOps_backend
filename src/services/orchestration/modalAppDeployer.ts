@@ -361,16 +361,18 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
         logger.info(`Modal deploy full stdout: ${stdout}`);
         logger.info(`Modal deploy full stderr: ${stderr}`);
 
-        // Extract HTTPS URL from Modal deploy output
-        const urlMatch = stdout.match(/https:\/\/[\w.-]+\.modal\.run[^\s]*/);
+        // Modal CLI may print the endpoint URL to stdout OR stderr
+        const combined = stdout + '\n' + stderr;
+        const urlMatch = combined.match(/https:\/\/[^\s]*\.modal\.run[^\s]*/);
         if (!urlMatch) {
           logger.warn(
-            `Could not find HTTPS URL in Modal output. Full output:\n${stdout}`,
+            `Could not find HTTPS URL in Modal output. Combined output:\n${combined}`,
           );
           reject(
             new DeploymentError('Modal: Could not extract endpoint URL', {
               deploymentId,
-              output: stdout,
+              stdout,
+              stderr,
             }),
           );
           return;

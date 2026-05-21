@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
-import { Orchestrator, DeploymentStatus } from '../../services/orchestration';
+import { Orchestrator, DeploymentStatus, DeploymentRecord } from '../../services/orchestration';
 import { DeploymentError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { config } from '../../utils/config';
@@ -87,6 +87,7 @@ export async function deploymentRoutes(
         } = validatedData;
 
         const deploymentId = uuidv4();
+        const agentId = uuidv4();
 
         logger.info(
           `Starting Modal deployment: deploymentId=${deploymentId}, framework=${blueprintJson.framework?.framework}`,
@@ -119,26 +120,37 @@ export async function deploymentRoutes(
           });
         }
 
+        const deployTime = Date.now() - startTime;
+
         // Store in Redis via orchestrator
         const deployment = {
           deploymentId,
+          agentId,
+          workerId: `modal-${deploymentId}`,
           status: endpointUrl ? 'running' : 'failed',
+          startTime: Date.now(),
+          estimatedTime: deployTime,
+          blueprintId: validatedData.blueprintId,
+          lockfilePath: validatedData.lockfilePath,
+          environmentHash: validatedData.environmentHash,
           endpointUrl,
           appName,
-          createdAt: Date.now(),
-        } as any;
+          endpointStatus: endpointUrl ? 'live' as const : 'failed' as const,
+          error: modalError,
+        } satisfies DeploymentRecord;
 
         await orchestrator.saveDeploymentRecord(deployment);
 
         return reply.code(endpointUrl ? 201 : 500).send({
           success: !!endpointUrl,
           deploymentId,
+          agentId,
           status: endpointUrl ? 'running' : 'failed',
-          endpoint_url: endpointUrl,
-          app_name: appName,
-          modal_deployment_error: modalError,
-          createdAt: Date.now(),
-          deploymentTime: Date.now() - startTime,
+          endpoint_url: endpointUrl ?? null,
+          endpoint_status: endpointUrl ? 'live' : 'failed',
+          modal_deployment_error: modalError ?? null,
+          framework: blueprintJson.framework?.framework,
+          deployTime: `${deployTime}ms`,
         });
       } catch (error) {
         const err = error instanceof DeploymentError ? error : new DeploymentError(
