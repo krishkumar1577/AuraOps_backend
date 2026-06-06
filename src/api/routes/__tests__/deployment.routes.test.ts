@@ -13,6 +13,13 @@ jest.mock('../../../utils/logger', () => ({
   },
 }));
 
+jest.mock('../../../services/swr/redisClient', () => ({
+  RedisWeightRegistry: jest.fn().mockImplementation(() => ({
+    getWeightCache: jest.fn().mockResolvedValue(null),
+    setWeightCache: jest.fn().mockResolvedValue(undefined),
+  })),
+}));
+
 describe('Deployment API Routes', () => {
   let mockFastify: any;
   let mockOrchestrator: jest.Mocked<Orchestrator>;

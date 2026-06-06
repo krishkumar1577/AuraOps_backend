@@ -425,7 +425,8 @@ export class Orchestrator {
   async deployPersistentModal(
     deploymentId: string,
     blueprint: BlueprintJSON,
-  ): Promise<{ endpointUrl: string; appName: string; deploymentTime: number }> {
+    deployConfig?: { skipPipInstall?: boolean; cachedImageRef?: string },
+  ): Promise<{ endpointUrl: string; appName: string; imageRef: string; deploymentTime: number }> {
     const start = Date.now();
 
     try {
@@ -449,7 +450,7 @@ export class Orchestrator {
       }
 
       // Deploy the persistent app
-      const result = await modalProvider.deployPersistentApp(deploymentId, blueprint);
+      const result = await modalProvider.deployPersistentApp(deploymentId, blueprint, deployConfig);
 
       const deploymentTime = Date.now() - start;
       logger.info(`✓ Persistent Modal app deployed in ${deploymentTime}ms: ${result.endpointUrl}`);

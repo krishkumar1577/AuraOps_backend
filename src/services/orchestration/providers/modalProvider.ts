@@ -198,7 +198,8 @@ export class ModalProvider extends BaseGPUProvider {
   async deployPersistentApp(
     deploymentId: string,
     blueprint: BlueprintJSON,
-  ): Promise<{ endpointUrl: string; appName: string }> {
+    deployConfig?: { skipPipInstall?: boolean; cachedImageRef?: string },
+  ): Promise<{ endpointUrl: string; appName: string; imageRef: string }> {
     const start = Date.now();
 
     try {
@@ -239,12 +240,19 @@ export class ModalProvider extends BaseGPUProvider {
         dependencyLockSize: blueprint.dependencyLock ? Object.keys(blueprint.dependencyLock).length : 0,
       });
 
+      // Log cache status
+      const skipPipInstall = deployConfig?.skipPipInstall ?? false;
+      const cachedImageRef = deployConfig?.cachedImageRef;
+      logger.info(
+        `Deploying with ${skipPipInstall ? 'cached' : 'fresh'} image for ${blueprint.framework.framework}:${blueprint.framework.version}`,
+      );
+
       logger.info(
         `Deploying persistent Modal app: deploymentId=${deploymentId}, framework=${blueprint.framework.framework}`,
       );
 
       // Step 1: Generate modal_app.py
-      const appContent = ModalAppDeployer.generateModalApp(blueprint, deploymentId);
+      const appContent = ModalAppDeployer.generateModalApp(blueprint, deploymentId, deployConfig);
       logger.info(`Generated modal_app.py content:\n${appContent}`);
 
       // Step 2: Write to temporary file
@@ -255,6 +263,7 @@ export class ModalProvider extends BaseGPUProvider {
 
       // Step 4: Store deployment record
       const appName = `auraops-${deploymentId}`;
+      const imageRef = cachedImageRef || `auraops-${deploymentId}`;
       this.deployedApps.set(deploymentId, {
         deploymentId,
         appName,
@@ -269,6 +278,7 @@ export class ModalProvider extends BaseGPUProvider {
       return {
         endpointUrl,
         appName,
+        imageRef,
       };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);

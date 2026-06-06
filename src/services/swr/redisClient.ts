@@ -170,6 +170,25 @@ export class RedisWeightRegistry {
     }
   }
 
+  async getWeightCache(cacheKey: string): Promise<string | null> {
+    try {
+      await this.ensureConnected();
+      return await this.client.get(cacheKey);
+    } catch (error: unknown) {
+      logger.warn(`Weight cache lookup failed: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
+  async setWeightCache(cacheKey: string, value: string, ttlSeconds: number = 2592000): Promise<void> {
+    try {
+      await this.ensureConnected();
+      await this.client.set(cacheKey, value, { EX: ttlSeconds });
+    } catch (error: unknown) {
+      logger.warn(`Weight cache set failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   private key(modelHash: string): string {
     return `${this.keyPrefix}${modelHash}`;
   }

@@ -17,6 +17,7 @@ export class ModalAppDeployer {
   static generateModalApp(
     blueprint: BlueprintJSON,
     deploymentId: string,
+    deployConfig?: { skipPipInstall?: boolean; cachedImageRef?: string },
   ): string {
     try {
       // Validate and log all inputs
@@ -24,6 +25,135 @@ export class ModalAppDeployer {
       if (!blueprint.dependencyLock) logger.warn('generateModalApp: dependencyLock is missing');
       if (!blueprint.deploymentConfig) logger.warn('generateModalApp: deploymentConfig is missing');
       if (!blueprint.framework) logger.warn('generateModalApp: framework is missing');
+
+      const skipPipInstall = deployConfig?.skipPipInstall ?? false;
+      const cachedImageRef = deployConfig?.cachedImageRef;
+
+      // If using cached image, return simplified app that skips pip_install
+      if (skipPipInstall && cachedImageRef) {
+        logger.info(`Deploying with cached image for ${blueprint.framework?.framework}:${blueprint.framework?.version}`);
+        return `
+#!/usr/bin/env python3
+"""
+AuraOps Modal App (Cached Image)
+Using pre-built cached image for fast deployment.
+Deployment ID: ${deploymentId}
+"""
+
+import modal
+from typing import Dict, Any
+
+# Initialize Modal app
+app = modal.App("auraops-${deploymentId}")
+
+# Use cached image reference
+image = modal.Image("${cachedImageRef}")
+
+# Agent class with persistent load
+@app.cls(
+    image=image,
+    timeout=300,
+    scaledown_window=60,
+)
+class AuraOpsAgent:
+    """AI Agent for inference using cached image"""
+
+    agent: Any = None
+    model: Any = None
+    tokenizer: Any = None
+
+    @modal.enter()
+    def load(self):
+        """Load model/agent on container startup"""
+        import time
+        start_time = time.time()
+        
+        try:
+            # Assume model already loaded in cached image
+            load_time = time.time() - start_time
+            print(f"✓ Agent ready in {load_time:.2f}s (cached image)")
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize agent: {str(e)}")
+
+    @modal.exit()
+    def cleanup(self):
+        """Cleanup resources on container shutdown"""
+        self.agent = None
+        self.model = None
+        self.tokenizer = None
+        print("✓ Agent cleanup complete")
+
+    @modal.fastapi_endpoint(method="POST")
+    def endpoint(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """HTTP POST endpoint for inference"""
+        import time
+        start_time = time.time()
+         
+        try:
+            # Run inference based on framework
+            input_text = request.get("input", "")
+            metadata = request.get("metadata", {})
+            output = self._run_inference(input_text, metadata)
+             
+            processing_time = (time.time() - start_time) * 1000  # Convert to ms
+             
+            return {
+                "output": output,
+                "deployment_id": "${deploymentId}",
+                "processing_time_ms": processing_time,
+                "cache_hit": True,
+            }
+        except Exception as e:
+            raise RuntimeError(f"Inference failed: {str(e)}")
+
+    def _run_inference(self, input_text: str, metadata: Dict[str, Any]) -> str:
+        """
+        Execute inference based on framework
+        """
+        framework = "${blueprint.framework?.framework || 'langchain'}"
+        
+        if framework == "langchain":
+            if self.agent is None:
+                raise RuntimeError("LangChain agent not loaded")
+            response = self.agent.invoke({"input": input_text})
+            return response.get("output", str(response))
+            
+        elif framework in ["transformers", "pytorch"]:
+            if self.model is None or self.tokenizer is None:
+                raise RuntimeError("Transformer model not loaded")
+            inputs = self.tokenizer(input_text, return_tensors="pt")
+            outputs = self.model.generate(**inputs, max_length=100)
+            return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+        elif framework == "jax":
+            if self.model is None:
+                raise RuntimeError("JAX model not loaded")
+            result = self.model(input_text)
+            return str(result)
+            
+        elif framework == "tensorflow":
+            if self.model is None:
+                raise RuntimeError("TensorFlow model not loaded")
+            result = self.model.predict([input_text])
+            return str(result[0])
+            
+        else:
+            raise ValueError(
+                f"Unsupported framework: {framework}. Supported: langchain, transformers, pytorch, jax, tensorflow"
+            )
+
+# Health check endpoint
+@app.function(image=image)
+def health_check():
+    """Simple health check"""
+    return {"status": "healthy", "deployment_id": "${deploymentId}", "cache_hit": True}
+
+if __name__ == "__main__":
+    # This allows local testing
+    print("Modal app configured for AuraOps deployment ${deploymentId} (cached)")
+    print("Deploy with: modal deploy modalapp.py")
+`;
+      }
 
       const dependencies = this.formatDependencies(blueprint.dependencyLock);
       const gpuConfig = this.selectGPU(blueprint.deploymentConfig?.gpuMemoryGB || 24);

@@ -446,4 +446,64 @@ describe('RedisWeightRegistry', () => {
       expect(stats.totalSizeGB).toBe(1000000);
     });
   });
+
+  describe('Weight Cache Operations', () => {
+    it('should retrieve weight cache', async () => {
+      const mockClient = new MockRedisClient();
+      const registry = new RedisWeightRegistry(mockClient);
+
+      await mockClient.set('weight-cache:test-hash', 'image-ref-123');
+      const cached = await registry.getWeightCache('weight-cache:test-hash');
+
+      expect(cached).toBe('image-ref-123');
+    });
+
+    it('should return null for missing weight cache', async () => {
+      const mockClient = new MockRedisClient();
+      const registry = new RedisWeightRegistry(mockClient);
+
+      const cached = await registry.getWeightCache('weight-cache:missing');
+      expect(cached).toBeNull();
+    });
+
+    it('should set weight cache with TTL', async () => {
+      const mockClient = new MockRedisClient();
+      const registry = new RedisWeightRegistry(mockClient);
+
+      await registry.setWeightCache('weight-cache:pytorch', 'docker-image-ref', 2592000);
+
+      const cached = await mockClient.get('weight-cache:pytorch');
+      expect(cached).toBe('docker-image-ref');
+
+      const ttl = await mockClient.ttl('weight-cache:pytorch');
+      expect(ttl).toBe(2592000);
+    });
+
+    it('should use default TTL if not provided', async () => {
+      const mockClient = new MockRedisClient();
+      const registry = new RedisWeightRegistry(mockClient);
+
+      await registry.setWeightCache('weight-cache:default', 'image-ref');
+
+      const ttl = await mockClient.ttl('weight-cache:default');
+      expect(ttl).toBe(2592000); // 30 days default
+    });
+
+    it('should handle cache lookup errors gracefully', async () => {
+      const mockClient = new MockRedisClient();
+      mockClient.isOpen = false;
+      const registry = new RedisWeightRegistry(mockClient);
+
+      const cached = await registry.getWeightCache('weight-cache:test');
+      expect(cached).toBeNull();
+    });
+
+    it('should handle cache set errors gracefully', async () => {
+      const mockClient = new MockRedisClient();
+      mockClient.isOpen = false;
+      const registry = new RedisWeightRegistry(mockClient);
+
+      await expect(registry.setWeightCache('weight-cache:test', 'value')).resolves.not.toThrow();
+    });
+  });
 });

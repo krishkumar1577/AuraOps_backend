@@ -4,6 +4,7 @@ import {
   GetObjectCommand,
   HeadObjectCommand,
   NoSuchKey,
+  S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { createReadStream, createWriteStream, promises as fsPromises } from 'fs';
 import { pipeline } from 'stream/promises';
@@ -47,10 +48,17 @@ export class S3WeightManager {
   private readonly retryDelayMs: number;
 
   constructor(options?: S3ManagerOptions) {
-    this.client = new S3Client({
+    const s3Config: S3ClientConfig = {
       region: options?.region ?? 'us-east-1',
-      ...(options?.endpoint ? { endpoint: options.endpoint } : {}),
-    });
+    };
+
+    const endpoint = options?.endpoint || process.env.AWS_ENDPOINT_URL;
+    if (endpoint) {
+      s3Config.endpoint = endpoint;
+      s3Config.forcePathStyle = true; // Required for Floci/LocalStack
+    }
+
+    this.client = new S3Client(s3Config);
     this.bucket = options?.bucket ?? 'auraops-weights';
     this.maxRetries = options?.maxRetries ?? 3;
     this.retryDelayMs = options?.retryDelayMs ?? 1000;
@@ -147,17 +155,13 @@ export class S3WeightManager {
 
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
-        // Parse S3 path (bucket/key or just key)
-        const [bucket, ...keyParts] = s3Path.includes('/') ? s3Path.split('/') : [this.bucket, s3Path];
-        const key = keyParts.join('/');
-
         // Create write stream
         const writeStream: WriteStream = createWriteStream(localPath);
 
         // Download from S3 with streaming
         const downloadCommand = new GetObjectCommand({
-          Bucket: bucket,
-          Key: key,
+          Bucket: this.bucket,
+          Key: s3Path,
         });
 
         const response = await this.client.send(downloadCommand);
@@ -175,7 +179,7 @@ export class S3WeightManager {
         const throughputMBps = (stats.size / 1024 / 1024) / (duration / 1000);
 
         logger.info(
-          `✓ S3 download complete: ${key} (${sizeGB.toFixed(2)}GB in ${duration}ms, ${throughputMBps.toFixed(2)}MB/s)`,
+          `✓ S3 download complete: ${s3Path} (${sizeGB.toFixed(2)}GB in ${duration}ms, ${throughputMBps.toFixed(2)}MB/s)`,
         );
         return;
       } catch (error) {
@@ -209,13 +213,9 @@ export class S3WeightManager {
    */
   async exists(s3Path: string): Promise<boolean> {
     try {
-      // Parse S3 path (bucket/key or just key)
-      const [bucket, ...keyParts] = s3Path.includes('/') ? s3Path.split('/') : [this.bucket, s3Path];
-      const key = keyParts.join('/');
-
       const command = new HeadObjectCommand({
-        Bucket: bucket,
-        Key: key,
+        Bucket: this.bucket,
+        Key: s3Path,
       });
 
       await this.client.send(command);

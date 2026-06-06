@@ -1,7 +1,9 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import { Orchestrator, DeploymentStatus, DeploymentRecord } from '../../services/orchestration';
+import { RedisWeightRegistry } from '../../services/swr/redisClient';
 import { DeploymentError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { config } from '../../utils/config';
@@ -48,10 +50,21 @@ const DeploymentIdParamSchema = z.object({
 
 type DeployRequest = z.infer<typeof DeployRequestSchema>;
 
+let redisRegistry: RedisWeightRegistry;
+
 export async function deploymentRoutes(
   fastify: FastifyInstance,
   orchestrator: Orchestrator,
 ): Promise<void> {
+  // Initialize Redis registry for weight cache
+  const initStart = Date.now();
+  try {
+    redisRegistry = new RedisWeightRegistry();
+    logger.info(`✓ Weight cache registry initialized (${Date.now() - initStart}ms)`);
+  } catch (error) {
+    const err = error instanceof Error ? error.message : String(error);
+    logger.warn(`Weight cache not available, deployment will proceed without caching: ${err}`);
+  }
   /**
    * POST /api/v1/deploy
    * Deploy AI agent to GPU
@@ -93,11 +106,45 @@ export async function deploymentRoutes(
           `Starting Modal deployment: deploymentId=${deploymentId}, framework=${blueprintJson.framework?.framework}`,
         );
 
+        // Generate cache key from blueprint
+        const blueprintHash = crypto.createHash('sha256')
+          .update(JSON.stringify({
+            framework: blueprintJson.framework?.framework,
+            version: blueprintJson.framework?.version,
+            deps: blueprintJson.dependencyLock || {}
+          }))
+          .digest('hex');
+
+        const cacheKey = `weight-cache:${blueprintHash}`;
+        const cacheStartTime = Date.now();
+
+        // Check weight cache
+        let cachedImageRef: string | null = null;
+        const deployConfig: Record<string, unknown> = {};
+
+        try {
+          if (redisRegistry) {
+            cachedImageRef = await redisRegistry.getWeightCache(cacheKey);
+          }
+        } catch (error) {
+          logger.warn(`Cache lookup failed, will proceed without cache: ${error instanceof Error ? error.message : String(error)}`);
+        }
+
+        if (cachedImageRef) {
+          logger.info(`✓ Cache hit for ${blueprintJson.framework?.framework}:${blueprintJson.framework?.version} (hash: ${blueprintHash.substring(0, 8)}...)`);
+          deployConfig.skipPipInstall = true;
+          deployConfig.cachedImageRef = cachedImageRef;
+        } else {
+          logger.info(`○ Cache miss for ${blueprintJson.framework?.framework}:${blueprintJson.framework?.version} — will cache after deploy`);
+          deployConfig.skipPipInstall = false;
+        }
+
         // Skip sandbox acquisition entirely
         // modal deploy handles GPU allocation
         let endpointUrl: string | undefined;
         let appName: string | undefined;
         let modalError: string | undefined;
+        let imageRef: string | undefined;
 
         try {
           const result = await orchestrator.deployPersistentModal(
@@ -106,11 +153,22 @@ export async function deploymentRoutes(
           );
           endpointUrl = result.endpointUrl;
           appName = result.appName;
+          imageRef = result.appName || result.endpointUrl;
 
           const deployTime = Date.now() - startTime;
           logger.info(
             `✓ Persistent Modal endpoint deployed in ${deployTime}ms: ${endpointUrl}`,
           );
+
+          // Cache on success if not already cached
+          if (endpointUrl && !cachedImageRef && imageRef && redisRegistry) {
+            try {
+              await redisRegistry.setWeightCache(cacheKey, imageRef);
+              logger.info(`✓ Cached ${blueprintJson.framework?.framework}:${blueprintJson.framework?.version} for 30 days`);
+            } catch (error) {
+              logger.warn(`Failed to cache result: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
         } catch (error) {
           modalError = error instanceof Error ? error.message : 'Unknown error';
           logger.error(`Modal deploy failed: ${modalError}`, {
@@ -121,6 +179,8 @@ export async function deploymentRoutes(
         }
 
         const deployTime = Date.now() - startTime;
+        const cacheStatus = cachedImageRef ? 'HIT' : 'MISS';
+        logger.info(`Deploy completed in ${deployTime}ms (cache: ${cacheStatus}, lookup: ${Date.now() - cacheStartTime}ms)`);
 
         // Store in Redis via orchestrator
         const deployment = {

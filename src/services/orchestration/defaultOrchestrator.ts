@@ -88,8 +88,12 @@ class ModalGPUProviderAdapter implements GPUProvider {
     return this.modal.healthCheck();
   }
 
-  async deployPersistentApp(deploymentId: string, blueprint: any): Promise<{ endpointUrl: string; appName: string }> {
-    return await this.modal.deployPersistentApp(deploymentId, blueprint);
+  async deployPersistentApp(
+    deploymentId: string,
+    blueprint: any,
+    deployConfig?: { skipPipInstall?: boolean; cachedImageRef?: string },
+  ): Promise<{ endpointUrl: string; appName: string; imageRef: string }> {
+    return await this.modal.deployPersistentApp(deploymentId, blueprint, deployConfig);
   }
 
   async stopPersistentApp(deploymentId: string): Promise<void> {

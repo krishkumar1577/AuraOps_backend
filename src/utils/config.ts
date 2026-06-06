@@ -23,6 +23,7 @@ const EnvSchema = z.object({
   MIN_WARM_WORKERS: z.coerce.number().int().nonnegative().default(2),
   MAX_IDLE_MS: z.coerce.number().int().positive().default(3600000),
   MAX_REQUEST_BODY_BYTES: z.coerce.number().int().positive().default(1048576),
+  AWS_ENDPOINT_URL: z.string().optional(),
 });
 
 const env = EnvSchema.parse({
@@ -45,6 +46,7 @@ const env = EnvSchema.parse({
   MIN_WARM_WORKERS: process.env.MIN_WARM_WORKERS,
   MAX_IDLE_MS: process.env.MAX_IDLE_MS,
   MAX_REQUEST_BODY_BYTES: process.env.MAX_REQUEST_BODY_BYTES,
+  AWS_ENDPOINT_URL: process.env.AWS_ENDPOINT_URL,
 });
 
 if (env.NODE_ENV === 'production' && env.JWT_SECRET === 'change-me-in-development-only') {
@@ -73,6 +75,7 @@ export const config = {
   max_request_body_bytes: env.MAX_REQUEST_BODY_BYTES,
   isDev: env.NODE_ENV === 'development',
   isProd: env.NODE_ENV === 'production',
+  aws_endpoint_url: env.AWS_ENDPOINT_URL,
 };
 
 export default config;
