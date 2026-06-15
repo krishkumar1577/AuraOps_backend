@@ -18,6 +18,7 @@ export {
   BaseGPUProvider,
   LambdaLabsProvider,
   AWSGPUProvider,
+  AzureGPUProvider,
   LocalGPUProvider,
 } from './providers';
 export type {

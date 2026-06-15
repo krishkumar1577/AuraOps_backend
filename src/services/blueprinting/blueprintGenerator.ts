@@ -57,6 +57,7 @@ export class BlueprintGenerator {
       'pytorch-2.0-cuda-11.8': 'aura-pytorch-2.0-cuda-11.8',
       'transformers-4.30-pytorch-2.1-cuda-12.1': 'aura-transformers-4.30-torch2.1-cuda12.1',
       'langchain-0.1-pytorch-2.1-cuda-12.1': 'aura-langchain-0.1-torch2.1-cuda12.1',
+      'langgraph-0.2-pytorch-2.1-cuda-12.1': 'aura-langchain-0.1-torch2.1-cuda12.1',
       'jax-0.4-cuda-12.1': 'aura-jax-0.4-cuda-12.1',
     };
 
@@ -76,6 +77,9 @@ export class BlueprintGenerator {
   }
 
   private estimateGpuMemory(fingerprint: FrameworkFingerprint): number {
+    if (fingerprint.langGraph?.recommendedGpuMemoryGB) {
+      return fingerprint.langGraph.recommendedGpuMemoryGB;
+    }
     if (fingerprint.primaryUse === 'training') return 24;
     if (fingerprint.primaryUse === 'agentic') return 16;
     return 8;

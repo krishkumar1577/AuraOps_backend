@@ -126,4 +126,33 @@ describe('FrameworkDetector', () => {
 
     expect(result.primaryUse).toBe('inference');
   });
+
+  it('should detect langgraph when analysis is provided', () => {
+    const manifest: ParsedManifest = {
+      framework: 'unknown',
+      frameworkVersion: '0.0.0',
+      pythonVersion: '3.11',
+      allDependencies: {
+        langgraph: '0.2.0',
+        langchain: '0.2.0',
+      },
+    };
+
+    const langGraphAnalysis = {
+      detected: true as const,
+      stateType: 'typeddict' as const,
+      stateClassName: 'AgentState',
+      estimatedStateSizeBytes: 8192,
+      checkpointing: false,
+      recommendedGpuTier: 'T4' as const,
+      recommendedGpuMemoryGB: 8 as const,
+    };
+
+    const result = detector.detect(manifest, langGraphAnalysis);
+
+    expect(result.framework).toBe('langgraph');
+    expect(result.version).toBe('0.2.0');
+    expect(result.langGraph).toEqual(langGraphAnalysis);
+    expect(result.primaryUse).toBe('agentic');
+  });
 });

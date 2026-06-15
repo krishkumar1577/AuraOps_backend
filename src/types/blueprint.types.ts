@@ -15,12 +15,27 @@ export interface ParsedManifest {
   }>;
 }
 
+export type LangGraphStateType = 'dict' | 'pydantic' | 'dataclass' | 'typeddict' | 'unknown';
+export type LangGraphGpuTier = 'T4' | 'L4' | 'A10G';
+
+export interface LangGraphMetadata {
+  detected: true;
+  stateType: LangGraphStateType;
+  stateClassName?: string;
+  estimatedStateSizeBytes: number;
+  checkpointing: boolean;
+  checkpointBackend?: 'memory' | 'sqlite' | 'postgres' | 'redis' | 'unknown';
+  recommendedGpuTier: LangGraphGpuTier;
+  recommendedGpuMemoryGB: 8 | 16 | 24;
+}
+
 export interface FrameworkFingerprint {
-  framework: 'pytorch' | 'langchain' | 'transformers' | 'jax' | 'tensorflow';
+  framework: 'pytorch' | 'langchain' | 'langgraph' | 'transformers' | 'jax' | 'tensorflow';
   version: string;
   cudaVersion: string;
   pythonVersion: string;
   primaryUse: 'inference' | 'training' | 'agentic';
+  langGraph?: LangGraphMetadata;
 }
 
 export interface BlueprintJSON {

@@ -83,11 +83,12 @@ describe('MCP Integration (Task 2A-5)', () => {
     deploymentStore = new Map();
 
     mockOrchestrator = {
-      deployPersistentModal: jest.fn().mockResolvedValue({
+      deployPersistentWithFallback: jest.fn().mockResolvedValue({
         endpointUrl: ENDPOINT,
         appName: 'auraops-echo',
         imageRef: 'auraops-echo',
         deploymentTime: 4100,
+        provider: 'Modal',
       }),
       saveDeploymentRecord: jest.fn(async (record: DeploymentRecord) => {
         deploymentStore.set(record.deploymentId, record);

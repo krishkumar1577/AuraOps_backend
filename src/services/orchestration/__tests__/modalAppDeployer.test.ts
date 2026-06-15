@@ -279,5 +279,61 @@ describe('ModalAppDeployer', () => {
       expect(code).toContain('torch_dtype=torch.float16');
       expect(code).toContain('device_map="auto"');
     });
+
+    it('should generate LangGraph loader with pre-compile at load()', () => {
+      const lgBlueprint: BlueprintJSON = {
+        ...mockBlueprint,
+        framework: {
+          ...mockBlueprint.framework,
+          framework: 'langgraph',
+          langGraph: {
+            detected: true,
+            stateType: 'pydantic',
+            stateClassName: 'AgentState',
+            estimatedStateSizeBytes: 4096,
+            checkpointing: false,
+            recommendedGpuTier: 'T4',
+            recommendedGpuMemoryGB: 8,
+          },
+        },
+        deploymentConfig: {
+          ...mockBlueprint.deploymentConfig,
+          gpuMemoryGB: 8,
+        },
+      };
+
+      const code = ModalAppDeployer.generateModalApp(lgBlueprint, 'dep_lg123');
+
+      expect(code).toContain('compile_graph_for_state');
+      expect(code).toContain('self.graph = compile_graph_for_state("pydantic")');
+      expect(code).toContain('self.compiled_graph = self.graph.compile()');
+      expect(code).toContain('✓ LangGraph pre-compiled at load()');
+      expect(code).not.toMatch(/def endpoint[\s\S]*\.compile\(/);
+    });
+
+    it('should include langgraph inference branch without compile in endpoint', () => {
+      const lgBlueprint: BlueprintJSON = {
+        ...mockBlueprint,
+        framework: {
+          ...mockBlueprint.framework,
+          framework: 'langgraph',
+          langGraph: {
+            detected: true,
+            stateType: 'typeddict',
+            estimatedStateSizeBytes: 8192,
+            checkpointing: true,
+            checkpointBackend: 'sqlite',
+            recommendedGpuTier: 'T4',
+            recommendedGpuMemoryGB: 8,
+          },
+        },
+      };
+
+      const code = ModalAppDeployer.generateModalApp(lgBlueprint, 'dep_lg_infer');
+
+      expect(code).toContain('elif framework == "langgraph":');
+      expect(code).toContain('self.compiled_graph.invoke');
+      expect(code).toContain('SqliteSaver');
+    });
   });
 });

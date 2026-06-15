@@ -56,6 +56,7 @@ const DeployRequestSchema = z.object({
   gpuRequirements: GPURequirementsSchema,
   gpuCount: z.number().int().min(1, 'GPU count must be at least 1').max(8, 'GPU count cannot exceed 8').optional().default(1),
   enableMcp: z.boolean().optional().default(false),
+  provider: z.enum(['auto', 'modal', 'azure', 'aws']).optional().default('auto'),
 });
 
 const DeploymentIdParamSchema = z.object({
@@ -154,6 +155,7 @@ export async function deploymentRoutes(
           blueprintJson,
           gpuCount,
           enableMcp,
+          provider: preferredProvider,
         } = validatedData;
 
         const deploymentId = uuidv4();
@@ -172,7 +174,7 @@ export async function deploymentRoutes(
         }
 
         logger.info(
-          `Starting Modal deployment: deploymentId=${deploymentId}, framework=${blueprintJson.framework?.framework}, gpus=${gpuCount}`,
+          `Starting deployment: deploymentId=${deploymentId}, framework=${blueprintJson.framework?.framework}, gpus=${gpuCount}, provider=${preferredProvider}`,
         );
 
         const gpuType = ModalAppDeployer.selectGPU(
@@ -207,20 +209,23 @@ export async function deploymentRoutes(
         let appName: string | undefined;
         let modalError: string | undefined;
         let imageRef: string | undefined;
+        let deployProvider: string | undefined;
 
         try {
-          const result = await orchestrator.deployPersistentModal(
+          const result = await orchestrator.deployPersistentWithFallback(
             deploymentId,
             blueprintJson as BlueprintJSON,
             { ...deployConfig, gpuCount, enableMcp },
+            preferredProvider,
           );
           endpointUrl = result.endpointUrl;
           appName = result.appName;
           imageRef = result.imageRef || result.appName || result.endpointUrl;
+          deployProvider = result.provider;
 
           const deployTime = Date.now() - startTime;
           logger.info(
-            `✓ Persistent Modal endpoint deployed in ${deployTime}ms: ${endpointUrl}`,
+            `✓ Persistent endpoint deployed via ${deployProvider} in ${deployTime}ms: ${endpointUrl}`,
           );
 
           // Cache image layer on success if not already cached
@@ -233,10 +238,12 @@ export async function deploymentRoutes(
           }
         } catch (error) {
           modalError = error instanceof Error ? error.message : 'Unknown error';
-          logger.error(`Modal deploy failed: ${modalError}`, {
+          logger.error(`Deploy failed: ${modalError}`, {
             deploymentId,
             blueprintFramework: blueprintJson.framework?.framework,
+            preferredProvider,
             hasModalTokens: !!(config.modal_token_id && config.modal_token_secret),
+            hasAzureCreds: !!(config.azure_client_id && config.azure_subscription_id),
           });
         }
 
@@ -265,7 +272,7 @@ export async function deploymentRoutes(
         const deployment = {
           deploymentId,
           agentId,
-          workerId: `modal-${deploymentId}`,
+          workerId: `${(deployProvider ?? 'modal').toLowerCase()}-${deploymentId}`,
           status: endpointUrl ? 'running' : 'failed',
           startTime: Date.now(),
           estimatedTime: deployTime,
@@ -308,6 +315,7 @@ export async function deploymentRoutes(
           endpoint_url: endpointUrl ?? null,
           endpoint_status: endpointUrl ? 'live' : 'failed',
           modal_deployment_error: modalError ?? null,
+          provider: deployProvider ?? preferredProvider,
           framework: blueprintJson.framework?.framework,
           gpuCount,
           deployTime: `${deployTime}ms`,

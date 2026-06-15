@@ -91,6 +91,7 @@ export class ManifestParser {
       'transformers': 'transformers',
       'torch': 'torch',
       'langchain': 'langchain',
+      'langgraph': 'langgraph',
       'numpy': 'numpy',
       'pandas': 'pandas',
       'tensorflow': 'tensorflow',

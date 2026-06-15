@@ -1,34 +1,61 @@
-import type { ParsedManifest, FrameworkFingerprint } from '../../types/blueprint.types';
+import type {
+  ParsedManifest,
+  FrameworkFingerprint,
+  LangGraphMetadata,
+} from '../../types/blueprint.types';
 import { FrameworkDetectionError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 
-type SupportedFramework = 'pytorch' | 'langchain' | 'transformers' | 'jax' | 'tensorflow';
+type SupportedFramework =
+  | 'pytorch'
+  | 'langchain'
+  | 'langgraph'
+  | 'transformers'
+  | 'jax'
+  | 'tensorflow';
 
 export class FrameworkDetector {
-  detect(manifest: ParsedManifest): FrameworkFingerprint {
-    const framework = this.identifyFramework(manifest);
+  detect(
+    manifest: ParsedManifest,
+    langGraphAnalysis?: LangGraphMetadata | null,
+  ): FrameworkFingerprint {
+    const framework = this.identifyFramework(manifest, langGraphAnalysis);
     const version = this.getFrameworkVersion(manifest, framework);
     const cudaVersion = this.determineCudaVersion(manifest, framework);
     const pythonVersion = manifest.pythonVersion;
     const primaryUse = this.inferPrimaryUse(manifest);
 
-    logger.info(
-      `Framework detected: ${framework} v${version} (CUDA ${cudaVersion}, Python ${pythonVersion})`,
-    );
-
-    return {
+    const fingerprint: FrameworkFingerprint = {
       framework,
       version,
       cudaVersion,
       pythonVersion,
       primaryUse,
     };
+
+    if (framework === 'langgraph' && langGraphAnalysis) {
+      fingerprint.langGraph = langGraphAnalysis;
+    }
+
+    logger.info(
+      `Framework detected: ${framework} v${version} (CUDA ${cudaVersion}, Python ${pythonVersion})`,
+    );
+
+    return fingerprint;
   }
 
-  private identifyFramework(manifest: ParsedManifest): SupportedFramework {
+  private identifyFramework(
+    manifest: ParsedManifest,
+    langGraphAnalysis?: LangGraphMetadata | null,
+  ): SupportedFramework {
+    if (langGraphAnalysis?.detected) {
+      return 'langgraph';
+    }
+
     const deps = manifest.allDependencies;
 
     const scores = {
+      langgraph: this.scoreHit(deps, ['langgraph']),
       langchain: this.scoreHit(deps, ['langchain', 'langchain-core']),
       pytorch: this.scoreHit(deps, ['torch', 'pytorch']),
       transformers: this.scoreHit(deps, ['transformers', 'huggingface-hub']),
@@ -36,15 +63,22 @@ export class FrameworkDetector {
       tensorflow: this.scoreHit(deps, ['tensorflow', 'tf-nightly']),
     };
 
-    // Framework hierarchy for tiebreaking (higher-level frameworks win)
-    const hierarchy: SupportedFramework[] = ['langchain', 'transformers', 'pytorch', 'jax', 'tensorflow'];
-    
-    // Filter frameworks with non-zero scores, sorted by priority
-    const candidates = hierarchy.filter(fw => scores[fw] > 0).sort((a, b) => scores[b] - scores[a]);
-    
+    const hierarchy: SupportedFramework[] = [
+      'langgraph',
+      'langchain',
+      'transformers',
+      'pytorch',
+      'jax',
+      'tensorflow',
+    ];
+
+    const candidates = hierarchy
+      .filter(fw => scores[fw] > 0)
+      .sort((a, b) => scores[b] - scores[a]);
+
     if (candidates.length === 0) {
       throw new FrameworkDetectionError(
-        'Could not detect supported framework. Supported: pytorch, langchain, transformers, jax, tensorflow',
+        'Could not detect supported framework. Supported: pytorch, langchain, langgraph, transformers, jax, tensorflow',
       );
     }
 
@@ -55,10 +89,14 @@ export class FrameworkDetector {
     return keywords.filter(k => k in deps).length * 10;
   }
 
-  private getFrameworkVersion(manifest: ParsedManifest, framework: SupportedFramework): string {
+  private getFrameworkVersion(
+    manifest: ParsedManifest,
+    framework: SupportedFramework,
+  ): string {
     const versionMap: Record<SupportedFramework, string> = {
       pytorch: manifest.torchVersion || '2.1.0',
       langchain: manifest.langchainVersion || '0.1.0',
+      langgraph: manifest.allDependencies['langgraph'] || '0.2.0',
       transformers: manifest.allDependencies['transformers'] || '4.30.0',
       jax: manifest.allDependencies['jax'] || '0.4.0',
       tensorflow: manifest.allDependencies['tensorflow'] || '2.13.0',
@@ -67,7 +105,10 @@ export class FrameworkDetector {
     return versionMap[framework] || 'latest';
   }
 
-  private determineCudaVersion(manifest: ParsedManifest, framework: SupportedFramework): string {
+  private determineCudaVersion(
+    manifest: ParsedManifest,
+    framework: SupportedFramework,
+  ): string {
     if (manifest.cudaVersion) return manifest.cudaVersion;
 
     const cudaMappings: Record<SupportedFramework, Record<string, string>> = {
@@ -77,6 +118,7 @@ export class FrameworkDetector {
         '1.13': '11.7',
       },
       langchain: { '*': '12.1' },
+      langgraph: { '*': '12.1' },
       transformers: { '*': '12.1' },
       jax: {
         '0.4': '12.1',
@@ -104,6 +146,10 @@ export class FrameworkDetector {
       deps['langchain'] &&
       (deps['langchain-community'] || deps['langgraph'] || deps['pydantic-ai'])
     ) {
+      return 'agentic';
+    }
+
+    if (deps['langgraph']) {
       return 'agentic';
     }
 

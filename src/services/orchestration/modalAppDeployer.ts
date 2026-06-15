@@ -84,6 +84,8 @@ class AuraOpsAgent:
     agent = None
     model = None
     tokenizer = None
+    graph = None
+    compiled_graph = None
 
     @modal.enter()
     def load(self):
@@ -104,6 +106,8 @@ class AuraOpsAgent:
         self.agent = None
         self.model = None
         self.tokenizer = None
+        self.graph = None
+        self.compiled_graph = None
         print("✓ Agent cleanup complete")
 
 ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
@@ -136,6 +140,14 @@ ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
                 raise RuntimeError("LangChain agent not loaded")
             response = self.agent.invoke({"input": input_text})
             return response.get("output", str(response))
+
+        elif framework == "langgraph":
+            if self.compiled_graph is None:
+                raise RuntimeError("LangGraph not loaded")
+            result = self.compiled_graph.invoke({"input": input_text})
+            if isinstance(result, dict):
+                return str(result.get("output", result))
+            return str(result)
             
         elif framework in ["transformers", "pytorch"]:
             if self.model is None or self.tokenizer is None:
@@ -158,7 +170,7 @@ ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
             
         else:
             raise ValueError(
-                f"Unsupported framework: {framework}. Supported: langchain, transformers, pytorch, jax, tensorflow"
+                f"Unsupported framework: {framework}. Supported: langchain, langgraph, transformers, pytorch, jax, tensorflow"
             )
 ${mcpAsgiStub}
 # Health check endpoint
@@ -176,6 +188,7 @@ if __name__ == "__main__":
       const loaderCode = this.generateFrameworkLoader(
         blueprint.framework?.framework || 'langchain',
         blueprint.customModels,
+        blueprint.framework?.langGraph,
       );
 
       return `
@@ -210,6 +223,8 @@ class AuraOpsAgent:
     agent = None
     model = None
     tokenizer = None
+    graph = None
+    compiled_graph = None
 
     @modal.enter()
     def load(self):
@@ -230,6 +245,8 @@ ${loaderCode}
         self.agent = None
         self.model = None
         self.tokenizer = None
+        self.graph = None
+        self.compiled_graph = None
         print("✓ Agent cleanup complete")
 
 ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
@@ -261,6 +278,14 @@ ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
                 raise RuntimeError("LangChain agent not loaded")
             response = self.agent.invoke({"input": input_text})
             return response.get("output", str(response))
+
+        elif framework == "langgraph":
+            if self.compiled_graph is None:
+                raise RuntimeError("LangGraph not loaded")
+            result = self.compiled_graph.invoke({"input": input_text})
+            if isinstance(result, dict):
+                return str(result.get("output", result))
+            return str(result)
             
         elif framework in ["transformers", "pytorch"]:
             if self.model is None or self.tokenizer is None:
@@ -283,7 +308,7 @@ ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
             
         else:
             raise ValueError(
-                f"Unsupported framework: {framework}. Supported: langchain, transformers, pytorch, jax, tensorflow"
+                f"Unsupported framework: {framework}. Supported: langchain, langgraph, transformers, pytorch, jax, tensorflow"
             )
 ${mcpAsgiStub}
 # Health check endpoint
@@ -360,10 +385,69 @@ if __name__ == "__main__":
   private static generateFrameworkLoader(
     framework: string,
     customModels?: Array<{ name: string; path: string }>,
+    langGraph?: BlueprintJSON['framework']['langGraph'],
   ): string {
     const indent = '            ';
 
     switch (framework) {
+      case 'langgraph': {
+        const stateType = langGraph?.stateType ?? 'unknown';
+        const checkpointing = langGraph?.checkpointing ?? false;
+        const checkpointBackend = langGraph?.checkpointBackend ?? 'memory';
+        const checkpointerImport =
+          checkpointing && checkpointBackend === 'sqlite'
+            ? `${indent}from langgraph.checkpoint.sqlite import SqliteSaver\n`
+            : checkpointing
+              ? `${indent}from langgraph.checkpoint.memory import MemorySaver\n`
+              : '';
+
+        const compileArgs = checkpointing
+          ? `\n${indent}checkpointer = ${
+              checkpointBackend === 'sqlite'
+                ? 'SqliteSaver.from_conn_string(":memory:")'
+                : 'MemorySaver()'
+            }\n${indent}self.compiled_graph = self.graph.compile(checkpointer=checkpointer)`
+          : `\n${indent}self.compiled_graph = self.graph.compile()`;
+
+        return `${indent}from langgraph.graph import StateGraph, END
+${checkpointerImport}
+${indent}def compile_graph_for_state(state_type: str):
+${indent}    """Build a minimal StateGraph scaffold for the detected state type."""
+${indent}    if state_type == "dict":
+${indent}        state_schema = dict
+${indent}    elif state_type == "pydantic":
+${indent}        from pydantic import BaseModel
+${indent}        class AgentState(BaseModel):
+${indent}            input: str = ""
+${indent}            output: str = ""
+${indent}        state_schema = AgentState
+${indent}    elif state_type in ("typeddict", "dataclass", "unknown"):
+${indent}        from typing import TypedDict
+${indent}        class AgentState(TypedDict):
+${indent}            input: str
+${indent}            output: str
+${indent}        state_schema = AgentState
+${indent}    else:
+${indent}        state_schema = dict
+${indent}
+${indent}    def process_node(state):
+${indent}        if isinstance(state, dict):
+${indent}            text = state.get("input", "")
+${indent}            return {"input": text, "output": f"langgraph:{text}"}
+${indent}        text = getattr(state, "input", "")
+${indent}        return {"input": text, "output": f"langgraph:{text}"}
+${indent}
+${indent}    graph = StateGraph(state_schema)
+${indent}    graph.add_node("process", process_node)
+${indent}    graph.set_entry_point("process")
+${indent}    graph.add_edge("process", END)
+${indent}    return graph
+${indent}
+${indent}self.graph = compile_graph_for_state("${stateType}")
+${compileArgs}
+${indent}print("✓ LangGraph pre-compiled at load()")`;
+      }
+
       case 'langchain':
         return `${indent}from langchain_openai import ChatOpenAI
 ${indent}from langchain.agents import initialize_agent, AgentType
@@ -415,7 +499,7 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
 
       default:
         throw new Error(
-          `Unsupported framework: ${framework}. Supported: langchain, transformers, pytorch, jax, tensorflow`,
+          `Unsupported framework: ${framework}. Supported: langchain, langgraph, transformers, pytorch, jax, tensorflow`,
         );
     }
   }

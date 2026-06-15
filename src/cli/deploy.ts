@@ -96,6 +96,7 @@ async function runDeploy(options: DeployOptions, gpusSource?: OptionValueSource)
     },
     gpuCount,
     enableMcp: options.mcp ?? false,
+    provider: options.provider && options.provider !== 'local' ? options.provider : 'auto',
   };
 
   let deployResult: {
@@ -212,7 +213,7 @@ async function runDeploy(options: DeployOptions, gpusSource?: OptionValueSource)
 export const deployCommand = new Command('deploy')
   .description('Deploy AI agent to GPU')
   .option('-b, --blueprint <path>', 'Path to blueprint.json (default: .auraops/blueprint.json)')
-  .option('-p, --provider <name>', 'GPU provider (lambdalabs, aws, local)', 'local')
+  .option('-p, --provider <name>', 'GPU provider (auto, modal, azure, aws)', 'auto')
   .option('-g, --gpu <type>', 'GPU type (e.g. a100, h100, rtx4090)')
   .option('--gpus <count>', 'Number of GPUs to allocate (1-8)')
   .option('--token <jwt>', 'API authentication token (or set AURAOPS_API_TOKEN)')

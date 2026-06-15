@@ -7,6 +7,11 @@ import {
   DeploymentLogEntry,
   DeploymentLogRedisClient,
 } from './deploymentLogStore';
+import {
+  resolvePersistentProviderOrder,
+  shouldFallbackToAzure,
+  type PersistentDeployProvider,
+} from './deployProviderFallback';
 
 const DEPLOYMENT_STATE_PREFIX = 'orchestration:deployment:';
 const ACTIVE_DEPLOYMENTS_KEY = 'orchestration:active-deployments';
@@ -507,6 +512,79 @@ export class Orchestrator {
         { deploymentId, originalError: errorMessage },
         error,
       );
+    }
+  }
+
+  /**
+   * Deploy persistent endpoint with multi-provider fallback (Modal → Azure → AWS).
+   */
+  async deployPersistentWithFallback(
+    deploymentId: string,
+    blueprint: BlueprintJSON,
+    deployConfig?: { skipPipInstall?: boolean; cachedImageRef?: string; gpuCount?: number; enableMcp?: boolean },
+    preferredProvider?: string,
+  ): Promise<{
+    endpointUrl: string;
+    appName: string;
+    imageRef: string;
+    deploymentTime: number;
+    provider: string;
+  }> {
+    const start = Date.now();
+
+    try {
+      await this.ensureConnected();
+
+      const persistentProviders = this.providers.filter(
+        (p): p is GPUProvider & PersistentDeployProvider =>
+          'deployPersistentApp' in p && typeof (p as PersistentDeployProvider).deployPersistentApp === 'function',
+      ) as PersistentDeployProvider[];
+
+      if (persistentProviders.length === 0) {
+        throw new DeploymentError('No persistent deploy providers available');
+      }
+
+      const ordered = resolvePersistentProviderOrder(persistentProviders, preferredProvider);
+      const hasAzure = persistentProviders.some((p) => p.name.toLowerCase() === 'azure');
+      const errors: string[] = [];
+
+      for (const provider of ordered) {
+        try {
+          logger.info(`Attempting persistent deploy via ${provider.name}`);
+          const result = await provider.deployPersistentApp(deploymentId, blueprint, deployConfig);
+          const deploymentTime = Date.now() - start;
+          logger.info(
+            `✓ Persistent app deployed via ${provider.name} in ${deploymentTime}ms: ${result.endpointUrl}`,
+          );
+          return { ...result, deploymentTime, provider: provider.name };
+        } catch (error: unknown) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          errors.push(`${provider.name}: ${errorMessage}`);
+
+          if (shouldFallbackToAzure(provider.name, error, hasAzure)) {
+            logger.warn(`Modal rate limited (429) — falling back to Azure`);
+            continue;
+          }
+
+          if (preferredProvider && preferredProvider !== 'auto') {
+            throw this.toDeploymentError(
+              `Failed to deploy via ${provider.name}`,
+              { deploymentId, provider: provider.name, originalError: errorMessage },
+              error,
+            );
+          }
+
+          logger.warn(`Provider ${provider.name} failed, trying next: ${errorMessage}`);
+        }
+      }
+
+      throw new DeploymentError('All persistent deploy providers failed', {
+        deploymentId,
+        errors,
+      });
+    } catch (error: unknown) {
+      if (error instanceof DeploymentError) throw error;
+      throw this.toDeploymentError('Failed to deploy persistent app', { deploymentId }, error);
     }
   }
 

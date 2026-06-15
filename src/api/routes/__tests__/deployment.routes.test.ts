@@ -60,9 +60,12 @@ describe('Deployment API Routes', () => {
         deploymentStore.delete(deploymentId);
       }),
       listDeploymentRecords: jest.fn(async () => Array.from(deploymentStore.values())),
-      deployPersistentModal: jest.fn().mockResolvedValue({
+      deployPersistentWithFallback: jest.fn().mockResolvedValue({
         endpointUrl: 'https://workspace--auraops-dep.modal.run',
         appName: 'auraops-dep',
+        imageRef: 'auraops-dep',
+        deploymentTime: 4100,
+        provider: 'Modal',
       }),
       stopPersistentModal: jest.fn(),
       terminateAgent: jest.fn(),
@@ -303,7 +306,7 @@ describe('Deployment API Routes', () => {
         }),
       );
       expect(logger.info).toHaveBeenCalledWith(
-        expect.stringContaining('Starting Modal deployment'),
+        expect.stringContaining('Starting deployment'),
       );
     });
 
@@ -367,7 +370,7 @@ describe('Deployment API Routes', () => {
     });
 
     it('should handle Modal deployment failure gracefully', async () => {
-      mockOrchestrator.deployPersistentModal.mockRejectedValue(
+      mockOrchestrator.deployPersistentWithFallback.mockRejectedValue(
         new DeploymentError('Modal deployment failed', {
           error: 'Authentication failed',
         }),
@@ -412,7 +415,7 @@ describe('Deployment API Routes', () => {
     });
 
     it('should handle Modal deployment timeout', async () => {
-      mockOrchestrator.deployPersistentModal.mockRejectedValue(
+      mockOrchestrator.deployPersistentWithFallback.mockRejectedValue(
         new DeploymentError('Deployment exceeded timeout', { timeout: 30000 }),
       );
 
@@ -526,10 +529,11 @@ describe('Deployment API Routes', () => {
 
       await deployHandler(request, mockReply);
 
-      expect(mockOrchestrator.deployPersistentModal).toHaveBeenCalledWith(
+      expect(mockOrchestrator.deployPersistentWithFallback).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(Object),
         expect.objectContaining({ gpuCount: 1 }),
+        'auto',
       );
       expect(mockReply.send).toHaveBeenCalledWith(
         expect.objectContaining({ gpuCount: 1 }),
@@ -568,10 +572,11 @@ describe('Deployment API Routes', () => {
 
       await deployHandler(request, mockReply);
 
-      expect(mockOrchestrator.deployPersistentModal).toHaveBeenCalledWith(
+      expect(mockOrchestrator.deployPersistentWithFallback).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(Object),
         expect.objectContaining({ gpuCount: 4 }),
+        'auto',
       );
       expect(mockReply.send).toHaveBeenCalledWith(
         expect.objectContaining({ gpuCount: 4 }),
@@ -663,7 +668,7 @@ describe('Deployment API Routes', () => {
       await deployHandler(request, mockReply);
 
       expect(logger.info).toHaveBeenCalledWith(
-        expect.stringContaining('Persistent Modal endpoint deployed in'),
+        expect.stringContaining('Persistent endpoint deployed via'),
       );
     });
   });
@@ -1214,7 +1219,7 @@ describe('Deployment API Routes', () => {
     });
 
     it('should handle internal server errors', async () => {
-      mockOrchestrator.deployPersistentModal.mockRejectedValue(
+      mockOrchestrator.deployPersistentWithFallback.mockRejectedValue(
         new Error('Unexpected internal error'),
       );
 
@@ -1258,7 +1263,7 @@ describe('Deployment API Routes', () => {
     });
 
     it('should log errors with details', async () => {
-      mockOrchestrator.deployPersistentModal.mockRejectedValue(
+      mockOrchestrator.deployPersistentWithFallback.mockRejectedValue(
         new DeploymentError('Modal deployment failed', {
           timeout: 5000,
         }),

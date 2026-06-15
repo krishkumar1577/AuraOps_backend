@@ -24,6 +24,14 @@ const EnvSchema = z.object({
   MAX_IDLE_MS: z.coerce.number().int().positive().default(3600000),
   MAX_REQUEST_BODY_BYTES: z.coerce.number().int().positive().default(1048576),
   AWS_ENDPOINT_URL: z.string().optional(),
+  AZURE_SUBSCRIPTION_ID: z.string().default(''),
+  AZURE_TENANT_ID: z.string().default(''),
+  AZURE_CLIENT_ID: z.string().default(''),
+  AZURE_CLIENT_SECRET: z.string().default(''),
+  AZURE_RESOURCE_GROUP: z.string().default('auraops-rg'),
+  AZURE_LOCATION: z.string().default('eastus'),
+  AZURE_STORAGE_ACCOUNT: z.string().default(''),
+  AZURE_STORAGE_CONTAINER: z.string().default('aura-weights'),
   LOOPS_API_KEY: z.string().default(''),
 });
 
@@ -49,6 +57,14 @@ const env = EnvSchema.parse({
   MAX_REQUEST_BODY_BYTES: process.env.MAX_REQUEST_BODY_BYTES,
   AWS_ENDPOINT_URL: process.env.AWS_ENDPOINT_URL,
   LOOPS_API_KEY: process.env.LOOPS_API_KEY,
+  AZURE_SUBSCRIPTION_ID: process.env.AZURE_SUBSCRIPTION_ID,
+  AZURE_TENANT_ID: process.env.AZURE_TENANT_ID,
+  AZURE_CLIENT_ID: process.env.AZURE_CLIENT_ID,
+  AZURE_CLIENT_SECRET: process.env.AZURE_CLIENT_SECRET,
+  AZURE_RESOURCE_GROUP: process.env.AZURE_RESOURCE_GROUP,
+  AZURE_LOCATION: process.env.AZURE_LOCATION,
+  AZURE_STORAGE_ACCOUNT: process.env.AZURE_STORAGE_ACCOUNT,
+  AZURE_STORAGE_CONTAINER: process.env.AZURE_STORAGE_CONTAINER,
 });
 
 if (env.NODE_ENV === 'production' && env.JWT_SECRET === 'change-me-in-development-only') {
@@ -79,6 +95,14 @@ export const config = {
   isProd: env.NODE_ENV === 'production',
   aws_endpoint_url: env.AWS_ENDPOINT_URL,
   loops_api_key: env.LOOPS_API_KEY,
+  azure_subscription_id: env.AZURE_SUBSCRIPTION_ID,
+  azure_tenant_id: env.AZURE_TENANT_ID,
+  azure_client_id: env.AZURE_CLIENT_ID,
+  azure_client_secret: env.AZURE_CLIENT_SECRET,
+  azure_resource_group: env.AZURE_RESOURCE_GROUP,
+  azure_location: env.AZURE_LOCATION,
+  azure_storage_account: env.AZURE_STORAGE_ACCOUNT,
+  azure_storage_container: env.AZURE_STORAGE_CONTAINER,
 };
 
 export default config;

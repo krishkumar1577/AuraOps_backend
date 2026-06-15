@@ -1,5 +1,6 @@
 import { logger } from '../../utils/logger';
 import type { GPUProvider, WorkerRequirements, WorkerInfo } from './orchestrator';
+import { PROVIDER_DEFAULT_HOURLY_PRICES } from './deployProviderFallback';
 
 export interface ProviderQuote {
   provider: GPUProvider;
@@ -81,17 +82,22 @@ export class ProviderRegistry {
     if ('getPrice' in provider && typeof (provider as { getPrice?: unknown }).getPrice === 'function') {
       try {
         const price = await (provider as GPUProvider & { getPrice: (g: string) => Promise<number> }).getPrice(gpuType);
-        return price;
+        if (price > 0) {
+          return price;
+        }
       } catch {
         return Number.POSITIVE_INFINITY;
       }
     }
-    return 999;
+
+    const defaultPrice = PROVIDER_DEFAULT_HOURLY_PRICES[provider.name.toLowerCase()];
+    return defaultPrice ?? 999;
   }
 
   private gpuTypeForMemory(minMemoryGB: number): string {
+    if (minMemoryGB <= 8) return 'T4';
     if (minMemoryGB <= 16) return 'T4';
-    if (minMemoryGB <= 24) return 'L4';
+    if (minMemoryGB <= 24) return 'A10G';
     if (minMemoryGB <= 40) return 'A100';
     return 'H100';
   }

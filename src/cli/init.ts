@@ -4,6 +4,7 @@ import * as path from 'path';
 import { ManifestParser } from '../services/blueprinting/manifestParser';
 import { FrameworkDetector } from '../services/blueprinting/frameworkDetector';
 import { BlueprintGenerator } from '../services/blueprinting/blueprintGenerator';
+import { LangGraphDetector } from '../services/blueprinting/frameworkDetectors';
 import * as ui from './utils';
 
 interface InitOptions {
@@ -27,6 +28,7 @@ export async function runInit(projectPath: string, options: InitOptions): Promis
 
   const parser = new ManifestParser();
   const detector = new FrameworkDetector();
+  const langGraphDetector = new LangGraphDetector();
   const generator = new BlueprintGenerator();
 
   const parseStart = Date.now();
@@ -34,8 +36,17 @@ export async function runInit(projectPath: string, options: InitOptions): Promis
   const depCount = Object.keys(manifest.allDependencies).length;
   ui.step(`Manifest parsed (${depCount} dependencies)`, ui.formatMs(Date.now() - parseStart));
 
+  const langGraphStart = Date.now();
+  const langGraphAnalysis = await langGraphDetector.analyze(resolvedPath);
+  if (langGraphAnalysis) {
+    ui.step(
+      `LangGraph StateGraph detected (${langGraphAnalysis.stateType} state)`,
+      ui.formatMs(Date.now() - langGraphStart),
+    );
+  }
+
   const detectStart = Date.now();
-  const fingerprint = detector.detect(manifest);
+  const fingerprint = detector.detect(manifest, langGraphAnalysis);
   ui.step(
     `Framework detected: ${fingerprint.framework} ${fingerprint.version}`,
     ui.formatMs(Date.now() - detectStart),
@@ -60,6 +71,13 @@ export async function runInit(projectPath: string, options: InitOptions): Promis
   ui.label('CUDA', fingerprint.cudaVersion);
   ui.label('Base Image', `${blueprint.systemRequirements.baseImageId}:${blueprint.systemRequirements.baseImageTag}`);
   ui.label('GPU Memory', `${blueprint.deploymentConfig.gpuMemoryGB}GB`);
+  if (fingerprint.langGraph) {
+    ui.label('GPU Tier', fingerprint.langGraph.recommendedGpuTier);
+    ui.label(
+      'State Size (est.)',
+      `${(fingerprint.langGraph.estimatedStateSizeBytes / 1024).toFixed(1)}KB`,
+    );
+  }
   ui.label('Use Case', fingerprint.primaryUse);
   ui.blank();
   ui.success(`Init complete in ${ui.formatMs(Date.now() - start)}`);

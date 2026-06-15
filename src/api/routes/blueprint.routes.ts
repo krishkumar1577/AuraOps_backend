@@ -1,5 +1,5 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { ManifestParser, FrameworkDetector, BlueprintGenerator } from '../../services/blueprinting';
+import { ManifestParser, FrameworkDetector, BlueprintGenerator, LangGraphDetector } from '../../services/blueprinting';
 import { logger } from '../../utils/logger';
 import { z } from 'zod';
 
@@ -10,6 +10,7 @@ const GenerateBlueprintSchema = z.object({
 export async function blueprintRoutes(fastify: FastifyInstance) {
   const parser = new ManifestParser();
   const detector = new FrameworkDetector();
+  const langGraphDetector = new LangGraphDetector();
   const generator = new BlueprintGenerator();
 
   fastify.post<{ Body: unknown }>(
@@ -25,8 +26,10 @@ export async function blueprintRoutes(fastify: FastifyInstance) {
         const manifest = await parser.parse(projectPath);
         const parseTime = Date.now() - parseStart;
 
+        const langGraphAnalysis = await langGraphDetector.analyze(projectPath);
+
         const detectStart = Date.now();
-        const fingerprint = detector.detect(manifest);
+        const fingerprint = detector.detect(manifest, langGraphAnalysis);
         const detectTime = Date.now() - detectStart;
 
         const genStart = Date.now();
@@ -43,6 +46,9 @@ export async function blueprintRoutes(fastify: FastifyInstance) {
             id: blueprint.id,
             framework: blueprint.framework.framework,
             frameworkVersion: blueprint.framework.version,
+            langGraph: blueprint.framework.langGraph,
+            gpuMemoryGB: blueprint.deploymentConfig.gpuMemoryGB,
+            gpuTier: blueprint.framework.langGraph?.recommendedGpuTier,
             baseImage: blueprint.systemRequirements.baseImageId,
             cudaVersion: blueprint.systemRequirements.cudaVersion,
             pythonVersion: blueprint.systemRequirements.pythonVersion,
