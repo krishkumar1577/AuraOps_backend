@@ -2,7 +2,11 @@ import { S3WeightManager } from '../s3Manager';
 import { promises as fsPromises } from 'fs';
 import path from 'path';
 import os from 'os';
-import { DeploymentError } from '../../../utils/errors';
+import { createHash } from 'crypto';
+import { Readable } from 'stream';
+import { S3Client } from '@aws-sdk/client-s3';
+import { pipeline } from 'stream/promises';
+import { DeploymentError, WeightVerificationError } from '../../../utils/errors';
 
 // Mock AWS SDK
 jest.mock('@aws-sdk/client-s3');
@@ -147,6 +151,52 @@ describe('S3WeightManager', () => {
       } catch (error) {
         expect(error).toBeInstanceOf(DeploymentError);
       }
+    });
+
+    it('should verify SHA256 when expectedHash matches downloaded file', async () => {
+      const outputFile = path.join(tempDir, 'verified-download.bin');
+      const testContent = Buffer.from('verified weight payload');
+      const expectedHash = createHash('sha256').update(testContent).digest('hex');
+
+      const sendMock = jest
+        .spyOn(S3Client.prototype, 'send')
+        .mockResolvedValue({ Body: Readable.from([testContent]) } as never);
+
+      (pipeline as jest.Mock).mockImplementation(
+        jest.requireActual<typeof import('stream/promises')>('stream/promises').pipeline,
+      );
+
+      await manager.download('models/test/hash/weights.bin', outputFile, expectedHash);
+
+      const written = await fsPromises.readFile(outputFile);
+      expect(written.equals(testContent)).toBe(true);
+
+      sendMock.mockRestore();
+      (pipeline as jest.Mock).mockResolvedValue(undefined);
+    });
+
+    it('should throw WeightVerificationError when expectedHash mismatches', async () => {
+      const outputFile = path.join(tempDir, 'mismatch-download.bin');
+      const testContent = Buffer.from('tampered weight payload');
+
+      const sendMock = jest
+        .spyOn(S3Client.prototype, 'send')
+        .mockResolvedValue({ Body: Readable.from([testContent]) } as never);
+
+      (pipeline as jest.Mock).mockImplementation(
+        jest.requireActual<typeof import('stream/promises')>('stream/promises').pipeline,
+      );
+
+      await expect(
+        manager.download(
+          'models/test/hash/weights.bin',
+          outputFile,
+          'deadbeef'.repeat(8),
+        ),
+      ).rejects.toThrow(WeightVerificationError);
+
+      sendMock.mockRestore();
+      (pipeline as jest.Mock).mockResolvedValue(undefined);
     });
   });
 

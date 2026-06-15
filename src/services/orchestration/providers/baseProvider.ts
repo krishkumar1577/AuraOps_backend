@@ -37,6 +37,10 @@ export abstract class BaseGPUProvider implements GPUProvider {
   abstract getPrice(gpuType: string, region?: string): Promise<number>;
   abstract healthCheck(): Promise<boolean>;
 
+  async getGpuUtilization(_workerId: string): Promise<number | null> {
+    return null;
+  }
+
   protected generateWorkerId(): string {
     return `worker-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   }
@@ -50,6 +54,9 @@ export abstract class BaseGPUProvider implements GPUProvider {
     }
     if (spec.maxWaitSeconds && spec.maxWaitSeconds <= 0) {
       throw new DeploymentError('GPU spec: maxWaitSeconds must be positive');
+    }
+    if (spec.gpuCount !== undefined && (spec.gpuCount < 1 || spec.gpuCount > 8)) {
+      throw new DeploymentError('GPU spec: gpuCount must be between 1 and 8');
     }
   }
 }

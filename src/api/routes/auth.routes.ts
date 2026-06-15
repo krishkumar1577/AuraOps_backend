@@ -4,6 +4,7 @@ import { hashPassword, verifyPassword } from '../../services/auth/passwordServic
 import { createUser, findByEmail } from '../../services/auth/userRepository';
 import { AuthenticationError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
+import { deployTelemetry } from '../../services/telemetry/deployTelemetry';
 
 const RegisterSchema = z.object({
   email: z.string().email('Invalid email format'),
@@ -43,6 +44,13 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         );
 
         logger.info(`User registered in ${Date.now() - start}ms: ${user.email}`);
+
+        void deployTelemetry.trackContact(user.email, user.id);
+        deployTelemetry.trackEventAsync({
+          email: user.email,
+          eventName: 'user_registered',
+          properties: { userId: user.id },
+        });
 
         return reply.code(201).send({
           success: true,

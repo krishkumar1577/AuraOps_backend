@@ -48,17 +48,27 @@ describe('ModalAppDeployer', () => {
       expect(code).toContain('@modal.enter()');
       expect(code).toContain('@modal.fastapi_endpoint');
       expect(code).toContain('def load(self)');
-      expect(code).toContain('def endpoint(self, request: Dict[str, Any])');
-      expect(code).toContain('Dict[str, Any]');
+      expect(code).toContain('def endpoint(self, request: dict) -> dict:');
       expect(code).not.toContain('class InferenceRequest');
       expect(code).not.toContain('class InferenceResponse');
     });
 
-    it('should include LangChain loader code', () => {
+    it('should include LangChain loader code inside load() method', () => {
       const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_test123');
 
       expect(code).toContain('from langchain_openai import ChatOpenAI');
       expect(code).toContain('self.agent = initialize_agent');
+    });
+
+    it('should not have third-party imports at module level (KRI-17)', () => {
+      const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_lazy123');
+      const beforeClass = code.split('class AuraOpsAgent')[0];
+
+      expect(beforeClass).toContain('import modal');
+      expect(beforeClass).not.toMatch(/from langchain|from transformers|import torch|import tensorflow|import jax/);
+      expect(beforeClass).not.toContain('from typing import');
+      expect(code).toContain('def load(self):');
+      expect(code).toContain('request: dict) -> dict:');
     });
 
     it('should include all dependencies in pip_install', () => {
@@ -187,6 +197,39 @@ describe('ModalAppDeployer', () => {
 
       expect(code).toContain('@modal.enter()');
       expect(code).toContain('def load(self)');
+    });
+  });
+
+  describe('Multi-GPU', () => {
+    it('should format single GPU without count suffix', () => {
+      const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_single_gpu');
+
+      expect(code).toContain('gpu="L4"');
+      expect(code).not.toContain('gpu="L4:');
+    });
+
+    it('should format multi-GPU with count suffix', () => {
+      const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_multi_gpu', { gpuCount: 4 });
+
+      expect(code).toContain('gpu="L4:4"');
+    });
+  });
+
+  describe('MCP unified ASGI', () => {
+    it('should use asgi_app with MCP routes when enableMcp is true', () => {
+      const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_mcp', { enableMcp: true });
+
+      expect(code).toContain('@modal.asgi_app()');
+      expect(code).toContain('/mcp/health');
+      expect(code).toContain('/mcp/tools/call');
+      expect(code).not.toContain('@modal.fastapi_endpoint');
+    });
+
+    it('should keep fastapi_endpoint when enableMcp is false', () => {
+      const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_no_mcp');
+
+      expect(code).toContain('@modal.fastapi_endpoint');
+      expect(code).not.toContain('@modal.asgi_app()');
     });
   });
 

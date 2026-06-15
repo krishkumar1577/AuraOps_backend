@@ -58,3 +58,10 @@ export class ConflictError extends AuraOpsError {
     this.name = 'ConflictError';
   }
 }
+
+export class WeightVerificationError extends AuraOpsError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super('WEIGHT_VERIFICATION_ERROR', message, 422, details);
+    this.name = 'WeightVerificationError';
+  }
+}

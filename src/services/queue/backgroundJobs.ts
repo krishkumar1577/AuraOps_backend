@@ -6,7 +6,11 @@ import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import type { Readable } from 'stream';
 import { logger } from '../../utils/logger';
-import { DeploymentError, ValidationError } from '../../utils/errors';
+import {
+  DeploymentError,
+  ValidationError,
+  WeightVerificationError,
+} from '../../utils/errors';
 import { S3WeightManager } from '../swr/s3Manager';
 import { RedisWeightRegistry, CachedWeight } from '../swr/redisClient';
 
@@ -304,6 +308,11 @@ export class BackgroundJobQueue {
       logger.debug(
         `Downloaded weight to ${downloadPath} (${Date.now() - timestamp}ms)`,
       );
+
+      if (modelHash) {
+        await this.s3Manager.verifyWeightHash(downloadPath, modelHash);
+      }
+
       job.progress(50);
 
       // Upload to S3
@@ -338,7 +347,8 @@ export class BackgroundJobQueue {
       logger.error(
         `Failed to process weight pull for ${modelName}: ${error}`,
       );
-      throw error instanceof DeploymentError
+      throw error instanceof DeploymentError ||
+        error instanceof WeightVerificationError
         ? error
         : new DeploymentError('Failed to process weight pull', { cause: error });
     } finally {

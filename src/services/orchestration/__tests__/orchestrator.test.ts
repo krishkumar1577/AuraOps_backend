@@ -7,6 +7,7 @@ class MockRedisClient {
   isOpen: boolean = true;
   store: Map<string, string> = new Map();
   sets: Map<string, Set<string>> = new Map();
+  lists: Map<string, string[]> = new Map();
   ttlMap: Map<string, number> = new Map();
 
   async connect(): Promise<void> {
@@ -54,6 +55,31 @@ class MockRedisClient {
     const set = this.sets.get(key);
     return set ? Array.from(set) : [];
   }
+
+  async rPush(key: string, ...values: string[]): Promise<number> {
+    const list = this.lists.get(key) ?? [];
+    list.push(...values);
+    this.lists.set(key, list);
+    return list.length;
+  }
+
+  async lRange(key: string, start: number, stop: number): Promise<string[]> {
+    const list = this.lists.get(key) ?? [];
+    const normalizedStop = stop < 0 ? list.length + stop : stop;
+    return list.slice(start, normalizedStop + 1);
+  }
+
+  async expire(key: string, seconds: number): Promise<boolean> {
+    this.ttlMap.set(key, seconds);
+    return true;
+  }
+
+  async lTrim(key: string, start: number, stop: number): Promise<string> {
+    const list = this.lists.get(key) ?? [];
+    const normalizedStop = stop < 0 ? list.length + stop : stop;
+    this.lists.set(key, list.slice(start, normalizedStop + 1));
+    return 'OK';
+  }
 }
 
 // Mock GPU Provider
@@ -62,6 +88,7 @@ class MockGPUProvider implements GPUProvider {
   workers: Map<string, WorkerInfo> = new Map();
   shouldFail: boolean = false;
   workers_list: WorkerInfo[] = [];
+  gpuUtilization: number | null = null;
 
   constructor(name: string, workerCount: number = 3) {
     this.name = name;
@@ -102,6 +129,10 @@ class MockGPUProvider implements GPUProvider {
 
   async healthCheck(workerId: string): Promise<boolean> {
     return this.workers.has(workerId);
+  }
+
+  async getGpuUtilization(_workerId: string): Promise<number | null> {
+    return this.gpuUtilization;
   }
 }
 
@@ -478,6 +509,57 @@ describe('Orchestrator', () => {
       expect(status.workerId).toBe(worker.workerId);
       expect(status.status).toBe('running');
       expect(status.containerImage).toBeDefined();
+      expect(status.gpuUtilization).toBeNull();
+    });
+
+    it('should populate live GPU utilization when running', async () => {
+      const requirements: WorkerRequirements = {
+        minGPUMemory: 4,
+        framework: 'pytorch',
+        pythonVersion: '3.10',
+      };
+      const worker = await orchestrator.acquireWorker(requirements);
+      provider1.gpuUtilization = 72;
+      const blueprint = createBlueprintFixture();
+
+      const deployment = await orchestrator.deployAgent(
+        worker.workerId,
+        blueprint,
+        '/path/to/lockfile',
+        'env-hash-123',
+      );
+
+      const status = await orchestrator.getDeploymentStatus(deployment.agentId);
+
+      expect(status.status).toBe('running');
+      expect(status.gpuUtilization).toBe(72);
+    });
+
+    it('should not populate GPU utilization for non-running deployments', async () => {
+      const requirements: WorkerRequirements = {
+        minGPUMemory: 4,
+        framework: 'pytorch',
+        pythonVersion: '3.10',
+      };
+      const worker = await orchestrator.acquireWorker(requirements);
+      provider1.gpuUtilization = 55;
+      const blueprint = createBlueprintFixture();
+
+      const deployment = await orchestrator.deployAgent(
+        worker.workerId,
+        blueprint,
+        '/path/to/lockfile',
+        'env-hash-123',
+      );
+
+      const deploymentKey = `orchestration:deployment:${deployment.agentId}`;
+      const stored = JSON.parse(redisClient.store.get(deploymentKey)!);
+      stored.status = 'deploying';
+      redisClient.store.set(deploymentKey, JSON.stringify(stored));
+
+      const status = await orchestrator.getDeploymentStatus(deployment.agentId);
+
+      expect(status.status).toBe('deploying');
       expect(status.gpuUtilization).toBeUndefined();
     });
 
@@ -487,24 +569,25 @@ describe('Orchestrator', () => {
       ).rejects.toThrow(DeploymentError);
     });
 
-    it('should not include fake GPU utilization', async () => {
+    it('should return null GPU utilization when provider has no metric', async () => {
       const requirements: WorkerRequirements = {
         minGPUMemory: 4,
         framework: 'pytorch',
         pythonVersion: '3.10',
       };
       const worker = await orchestrator.acquireWorker(requirements);
+      provider1.gpuUtilization = null;
       const blueprint = createBlueprintFixture();
 
       const deployment = await orchestrator.deployAgent(
         worker.workerId,
         blueprint,
         '/path/to/lockfile',
-        'env-hash-123'
+        'env-hash-123',
       );
 
       const status = await orchestrator.getDeploymentStatus(deployment.agentId);
-      expect(status.gpuUtilization).toBeUndefined();
+      expect(status.gpuUtilization).toBeNull();
     });
   });
 

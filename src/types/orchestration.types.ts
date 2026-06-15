@@ -25,6 +25,8 @@ export interface GPUAcquisitionSpec {
   region?: string;
   maxWaitSeconds?: number;
   secureRuntime?: boolean;
+  /** Number of GPUs to allocate (1-8, default 1). */
+  gpuCount?: number;
 }
 
 export interface GPUProvider {
@@ -35,4 +37,5 @@ export interface GPUProvider {
   releaseGPU(workerId: string): Promise<void>;
   getPrice(gpuType: string, region?: string): Promise<number>;
   healthCheck(): Promise<boolean>;
+  getGpuUtilization(workerId: string): Promise<number | null>;
 }

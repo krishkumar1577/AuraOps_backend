@@ -216,4 +216,11 @@ describe('AWSGPUProvider', () => {
       ).rejects.toThrow('AWSGPUProvider connection failed');
     });
   });
+
+  describe('getGpuUtilization', () => {
+    it('should return null (not yet implemented)', async () => {
+      const utilization = await provider.getGpuUtilization('worker-123');
+      expect(utilization).toBeNull();
+    });
+  });
 });

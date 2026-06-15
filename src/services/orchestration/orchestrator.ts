@@ -2,6 +2,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { DeploymentError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import type { BlueprintJSON } from '../../types/blueprint.types';
+import {
+  DeploymentLogStore,
+  DeploymentLogEntry,
+  DeploymentLogRedisClient,
+} from './deploymentLogStore';
 
 const DEPLOYMENT_STATE_PREFIX = 'orchestration:deployment:';
 const ACTIVE_DEPLOYMENTS_KEY = 'orchestration:active-deployments';
@@ -16,6 +21,7 @@ export interface GPUProvider {
   acquireWorker(requirements: WorkerRequirements): Promise<WorkerInfo | null>;
   releaseWorker(workerId: string): Promise<void>;
   healthCheck(workerId: string): Promise<boolean>;
+  getGpuUtilization(workerId: string): Promise<number | null>;
 }
 
 export interface WorkerRequirements {
@@ -23,6 +29,8 @@ export interface WorkerRequirements {
   framework: string;
   pythonVersion: string;
   secureRuntime?: boolean;
+  /** Number of GPUs to allocate (1-8, default 1). */
+  gpuCount?: number;
 }
 
 export interface WorkerInfo {
@@ -61,6 +69,14 @@ export interface DeploymentRecord {
   endpointUrl?: string;
   appName?: string;
   endpointStatus?: 'pending' | 'live' | 'failed';
+  /** Number of GPUs allocated for this deployment (1-8). */
+  gpuCount?: number;
+  /** GPU type selected for this deployment (e.g. T4, L4, A100). */
+  gpuType?: string;
+  /** MCP server enabled for this deployment */
+  mcpEnabled?: boolean;
+  /** Discoverable MCP server card JSON */
+  mcpCard?: Record<string, unknown>;
 }
 
 interface StoredDeployment {
@@ -83,15 +99,27 @@ export interface RedisClient {
   sAdd(key: string, member: string): Promise<number>;
   sRem(key: string, member: string): Promise<number>;
   sMembers(key: string): Promise<string[]>;
+  rPush(key: string, ...values: string[]): Promise<number>;
+  lRange(key: string, start: number, stop: number): Promise<string[]>;
+  expire(key: string, seconds: number): Promise<boolean>;
+  lTrim(key: string, start: number, stop: number): Promise<string>;
+}
+
+interface ModalLogCapableProvider {
+  name: string;
+  fetchPersistentAppLogs?(deploymentId: string): Promise<{ stdout: string; stderr: string }>;
+  fetchSandboxLogs?(workerId: string): Promise<{ stdout: string; stderr: string }>;
 }
 
 export class Orchestrator {
   private readonly providers: GPUProvider[];
   private readonly redisClient: RedisClient;
+  private readonly logStore: DeploymentLogStore;
 
   constructor(providers: GPUProvider[], redisClient: RedisClient) {
     this.providers = providers;
     this.redisClient = redisClient;
+    this.logStore = new DeploymentLogStore(redisClient as unknown as DeploymentLogRedisClient);
   }
 
   async acquireWorker(requirements: WorkerRequirements): Promise<WorkerInfo> {
@@ -333,7 +361,11 @@ export class Orchestrator {
       }
 
       const deployment = JSON.parse(payload) as StoredDeployment;
-      
+
+      if (deployment.status === 'running') {
+        deployment.gpuUtilization = await this.fetchGpuUtilization(deployment.workerId);
+      }
+
       // Update last activity on every status check (Simulating Scale-to-Zero activity)
       deployment.lastActivityAt = Date.now();
       await this.redisClient.set(deploymentKey, JSON.stringify(deployment), {
@@ -425,7 +457,7 @@ export class Orchestrator {
   async deployPersistentModal(
     deploymentId: string,
     blueprint: BlueprintJSON,
-    deployConfig?: { skipPipInstall?: boolean; cachedImageRef?: string },
+    deployConfig?: { skipPipInstall?: boolean; cachedImageRef?: string; gpuCount?: number; enableMcp?: boolean },
   ): Promise<{ endpointUrl: string; appName: string; imageRef: string; deploymentTime: number }> {
     const start = Date.now();
 
@@ -509,6 +541,23 @@ export class Orchestrator {
     }
   }
 
+  private async fetchGpuUtilization(workerId: string): Promise<number | null> {
+    for (const provider of this.providers) {
+      try {
+        const isHealthy = await provider.healthCheck(workerId);
+        if (!isHealthy) {
+          continue;
+        }
+
+        return await provider.getGpuUtilization(workerId);
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
+  }
+
   private deploymentKey(agentId: string): string {
     return `${DEPLOYMENT_STATE_PREFIX}${agentId}`;
   }
@@ -523,6 +572,32 @@ export class Orchestrator {
       EX: 86400,
     });
     await this.redisClient.sAdd(DEPLOYMENT_RECORDS_KEY, record.deploymentId);
+    await this.registerActiveDeployment(record);
+  }
+
+  /**
+   * Register a deployment in the active set so listDeployments() and /agents work for Modal deploys.
+   */
+  async registerActiveDeployment(record: DeploymentRecord): Promise<void> {
+    const deployment: StoredDeployment = {
+      agentId: record.agentId,
+      workerId: record.workerId,
+      status: record.status,
+      startTime: record.startTime,
+      lastActivityAt: Date.now(),
+      containerImage: record.appName ?? `modal-${record.deploymentId}`,
+    };
+
+    await this.redisClient.set(this.deploymentKey(record.agentId), JSON.stringify(deployment), {
+      EX: 86400,
+    });
+    await this.redisClient.sAdd(ACTIVE_DEPLOYMENTS_KEY, record.agentId);
+  }
+
+  async unregisterActiveDeployment(agentId: string): Promise<void> {
+    await this.ensureConnected();
+    await this.redisClient.del(this.deploymentKey(agentId));
+    await this.redisClient.sRem(ACTIVE_DEPLOYMENTS_KEY, agentId);
   }
 
   async getDeploymentRecord(deploymentId: string): Promise<DeploymentRecord | null> {
@@ -537,8 +612,12 @@ export class Orchestrator {
 
   async deleteDeploymentRecord(deploymentId: string): Promise<void> {
     await this.ensureConnected();
+    const record = await this.getDeploymentRecord(deploymentId);
     await this.redisClient.del(this.deploymentRecordKey(deploymentId));
     await this.redisClient.sRem(DEPLOYMENT_RECORDS_KEY, deploymentId);
+    if (record) {
+      await this.unregisterActiveDeployment(record.agentId);
+    }
   }
 
   async listDeploymentRecords(): Promise<DeploymentRecord[]> {
@@ -556,6 +635,76 @@ export class Orchestrator {
     }
 
     return records;
+  }
+
+  async appendDeploymentLog(deploymentId: string, entry: DeploymentLogEntry): Promise<void> {
+    await this.logStore.appendLog(deploymentId, entry);
+  }
+
+  async getStoredDeploymentLogs(deploymentId: string): Promise<DeploymentLogEntry[]> {
+    return this.logStore.getLogs(deploymentId);
+  }
+
+  async refreshContainerLogs(deployment: DeploymentRecord): Promise<void> {
+    const start = Date.now();
+    const modalProvider = this.findModalLogProvider();
+    if (!modalProvider) {
+      return;
+    }
+
+    const existing = await this.logStore.getLogs(deployment.deploymentId);
+    const existingMessages = new Set(existing.map(log => log.message));
+
+    let stdout = '';
+    let stderr = '';
+
+    if (deployment.workerId.startsWith('modal-') && modalProvider.fetchPersistentAppLogs) {
+      const result = await modalProvider.fetchPersistentAppLogs(deployment.deploymentId);
+      stdout = result.stdout;
+      stderr = result.stderr;
+    } else if (modalProvider.fetchSandboxLogs) {
+      const result = await modalProvider.fetchSandboxLogs(deployment.workerId);
+      stdout = result.stdout;
+      stderr = result.stderr;
+    }
+
+    const newStdoutLines = stdout
+      .split('\n')
+      .map(line => line.trimEnd())
+      .filter(line => line.length > 0 && !existingMessages.has(line));
+    const newStderrLines = stderr
+      .split('\n')
+      .map(line => line.trimEnd())
+      .filter(line => line.length > 0 && !existingMessages.has(line));
+
+    await this.logStore.appendLines(deployment.deploymentId, newStdoutLines, 'stdout');
+    await this.logStore.appendLines(deployment.deploymentId, newStderrLines, 'stderr');
+
+    if (newStdoutLines.length > 0 || newStderrLines.length > 0) {
+      logger.info(
+        `Refreshed container logs for ${deployment.deploymentId} (+${newStdoutLines.length + newStderrLines.length} lines) in ${Date.now() - start}ms`,
+      );
+    }
+  }
+
+  async getContainerLogs(deployment: DeploymentRecord): Promise<DeploymentLogEntry[]> {
+    try {
+      await this.refreshContainerLogs(deployment);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.warn(`Container log refresh failed for ${deployment.deploymentId}: ${msg}`);
+    }
+
+    return this.logStore.getLogs(deployment.deploymentId);
+  }
+
+  private findModalLogProvider(): ModalLogCapableProvider | null {
+    for (const provider of this.providers) {
+      if (provider.name === 'Modal') {
+        return provider as ModalLogCapableProvider;
+      }
+    }
+    return null;
   }
 
   private async ensureConnected(): Promise<void> {

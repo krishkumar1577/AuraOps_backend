@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>API Reference — AuraOps Docs</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <nav>
+    <a href="index.html" class="logo">AuraOps</a>
+    <div class="links">
+      <a href="index.html">Docs</a>
+      <a href="quickstart.html">Quickstart</a>
+      <a href="api.html" class="active">API</a>
+    </div>
+  </nav>
+
+  <main>
+    <h1>API Reference</h1>
+    <p class="lead">Base URL: <code>https://auraops-backend-production.up.railway.app</code></p>
+    <p>All endpoints except <code>/health</code> and <code>/api/v1/auth/*</code> require <code>Authorization: Bearer &lt;token&gt;</code>.</p>
+
+    <h2>Auth</h2>
+    <table>
+      <tr><th>Method</th><th>Route</th><th>Description</th></tr>
+      <tr><td>POST</td><td><code>/api/v1/auth/register</code></td><td>Register, get API token</td></tr>
+      <tr><td>POST</td><td><code>/api/v1/auth/login</code></td><td>Login, get API token</td></tr>
+    </table>
+
+    <h2>Blueprint</h2>
+    <table>
+      <tr><th>Method</th><th>Route</th><th>Description</th></tr>
+      <tr><td>POST</td><td><code>/api/v1/blueprint/generate</code></td><td>Generate blueprint from manifest</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/blueprint/:id</code></td><td>Get blueprint details</td></tr>
+    </table>
+
+    <h2>Deploy</h2>
+    <table>
+      <tr><th>Method</th><th>Route</th><th>Description</th></tr>
+      <tr><td>POST</td><td><code>/api/v1/deploy</code></td><td>Deploy agent to GPU</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/deployment/:id</code></td><td>Deployment status</td></tr>
+      <tr><td>DELETE</td><td><code>/api/v1/deployment/:id</code></td><td>Terminate deployment</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/deployment/:id/logs</code></td><td>Container logs</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/agents</code></td><td>List running agents</td></tr>
+    </table>
+
+    <h3>POST /api/v1/deploy</h3>
+    <pre>{
+  "blueprintId": "uuid",
+  "blueprintJson": { ... },
+  "lockfilePath": "/path/to/lock",
+  "environmentHash": "sha256...",
+  "gpuRequirements": {
+    "minMemory": 16,
+    "framework": "pytorch",
+    "pythonVersion": "3.11"
+  },
+  "gpuCount": 1,
+  "enableMcp": false
+}</pre>
+
+    <h3>Response</h3>
+    <pre>{
+  "success": true,
+  "deploymentId": "uuid",
+  "agentId": "uuid",
+  "status": "running",
+  "endpoint_url": "https://....modal.run",
+  "deployTime": "4100ms"
+}</pre>
+
+    <h2>Weights (SWR)</h2>
+    <table>
+      <tr><th>Method</th><th>Route</th><th>Description</th></tr>
+      <tr><td>GET</td><td><code>/api/v1/weights</code></td><td>List cached weights</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/weights/:hash</code></td><td>Weight details</td></tr>
+      <tr><td>POST</td><td><code>/api/v1/weights/pull</code></td><td>Queue weight download</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/weights/stats</code></td><td>Cache statistics</td></tr>
+    </table>
+
+    <h2>Health</h2>
+    <pre>GET /health
+→ { "status": "healthy", "timestamp": "..." }</pre>
+  </main>
+
+  <footer>AuraOps Docs · <a href="quickstart.html">← Quickstart</a></footer>
+</body>
+</html>

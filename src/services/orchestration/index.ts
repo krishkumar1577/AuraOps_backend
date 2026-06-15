@@ -8,6 +8,9 @@ export type {
   RedisClient,
 } from './orchestrator';
 
+export { DeploymentLogStore, DeploymentLogEntrySchema } from './deploymentLogStore';
+export type { DeploymentLogEntry } from './deploymentLogStore';
+
 export { HealthCheck } from './healthCheck';
 export type { HealthStatus, HealthCheckConfig } from './healthCheck';
 

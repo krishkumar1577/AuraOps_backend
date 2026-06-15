@@ -6,10 +6,11 @@ import {
   NoSuchKey,
   S3ClientConfig,
 } from '@aws-sdk/client-s3';
+import { createHash } from 'crypto';
 import { createReadStream, createWriteStream, promises as fsPromises } from 'fs';
 import { pipeline } from 'stream/promises';
 import type { ReadStream, WriteStream } from 'fs';
-import { DeploymentError } from '../../utils/errors';
+import { DeploymentError, WeightVerificationError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 
 export interface S3UploadResult {
@@ -149,7 +150,11 @@ export class S3WeightManager {
    * Download a file from S3 with streaming and retry logic
    * Performance target: 15GB in <15s
    */
-  async download(s3Path: string, localPath: string): Promise<void> {
+  async download(
+    s3Path: string,
+    localPath: string,
+    expectedHash?: string,
+  ): Promise<void> {
     const start = Date.now();
     let lastError: Error | null = null;
 
@@ -173,6 +178,10 @@ export class S3WeightManager {
         // Pipe S3 stream to file
         await pipeline(response.Body as unknown as NodeJS.ReadableStream, writeStream);
 
+        if (expectedHash) {
+          await this.verifyWeightHash(localPath, expectedHash);
+        }
+
         const stats = await fsPromises.stat(localPath);
         const duration = Date.now() - start;
         const sizeGB = stats.size / 1024 / 1024 / 1024;
@@ -183,6 +192,10 @@ export class S3WeightManager {
         );
         return;
       } catch (error) {
+        if (error instanceof WeightVerificationError) {
+          throw error;
+        }
+
         lastError = error instanceof Error ? error : new Error(String(error));
         logger.warn(
           `S3 download attempt ${attempt}/${this.maxRetries} failed: ${lastError.message}`,
@@ -206,6 +219,39 @@ export class S3WeightManager {
       cause: lastError,
       attempts: this.maxRetries,
     });
+  }
+
+  /**
+   * Verify SHA256 hash of a local weight file matches the expected value
+   */
+  async verifyWeightHash(localPath: string, expectedHash: string): Promise<void> {
+    const start = Date.now();
+    const actualHash = await this.computeFileSha256(localPath);
+
+    if (actualHash.toLowerCase() !== expectedHash.toLowerCase()) {
+      throw new WeightVerificationError('Downloaded weight hash mismatch', {
+        expectedHash,
+        actualHash,
+        localPath,
+      });
+    }
+
+    logger.info(`✓ Weight hash verified in ${Date.now() - start}ms`);
+  }
+
+  private async computeFileSha256(localPath: string): Promise<string> {
+    const hash = createHash('sha256');
+    const stream = createReadStream(localPath);
+
+    await new Promise<void>((resolve, reject) => {
+      stream.on('data', (chunk: Buffer | string) => {
+        hash.update(chunk);
+      });
+      stream.on('end', () => resolve());
+      stream.on('error', (error: Error) => reject(error));
+    });
+
+    return hash.digest('hex');
   }
 
   /**

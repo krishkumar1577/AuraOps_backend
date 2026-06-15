@@ -38,6 +38,11 @@ function selectGPU(minMemoryGB: number): string {
   return ranked[0][0];
 }
 
+/** Format Modal GPU spec: "T4" for 1 GPU, "T4:2" for multi-GPU. */
+function formatModalGpu(gpuType: string, count: number): string {
+  return count > 1 ? `${gpuType}:${count}` : gpuType;
+}
+
 interface ActiveSandbox {
   sandbox: Sandbox;
   sandboxId: string;
@@ -93,16 +98,18 @@ export class ModalProvider extends BaseGPUProvider {
     this.validateGPUSpec(spec);
 
     const gpuType = selectGPU(spec.minMemory);
+    const gpuCount = spec.gpuCount ?? 1;
+    const gpuSpec = formatModalGpu(gpuType, gpuCount);
     const memoryGB = GPU_MEMORY_MAP[gpuType];
 
-    logger.info(`Acquiring Modal sandbox: gpu=${gpuType}, framework=${spec.framework}`);
+    logger.info(`Acquiring Modal sandbox: gpu=${gpuSpec}, framework=${spec.framework}`);
 
     try {
       const image = this.client!.images.fromRegistry('python:3.11-slim');
       const workerId = this.generateWorkerId();
 
       const sandbox = await this.client!.sandboxes.create(this.app!, image, {
-        gpu: gpuType,
+        gpu: gpuSpec,
         timeoutMs: 300_000,
         name: workerId,
       });
@@ -188,8 +195,85 @@ export class ModalProvider extends BaseGPUProvider {
     return { stdout, stderr, exitCode };
   }
 
+  async getGpuUtilization(workerId: string): Promise<number | null> {
+    const start = Date.now();
+
+    try {
+      this.requireConnection();
+
+      if (!this.activeSandboxes.has(workerId)) {
+        return null;
+      }
+
+      const utilizationResult = await this.execInSandbox(workerId, [
+        'nvidia-smi',
+        '--query-gpu=utilization.gpu',
+        '--format=csv,noheader,nounits',
+      ]);
+
+      if (utilizationResult.exitCode === 0 && utilizationResult.stdout.trim()) {
+        const parsed = parseFloat(utilizationResult.stdout.trim().split('\n')[0]);
+        if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= 100) {
+          const utilization = Math.round(parsed);
+          logger.info(`Modal GPU utilization for ${workerId}: ${utilization}% in ${Date.now() - start}ms`);
+          return utilization;
+        }
+      }
+
+      const memoryResult = await this.execInSandbox(workerId, [
+        'nvidia-smi',
+        '--query-gpu=memory.used,memory.total',
+        '--format=csv,noheader,nounits',
+      ]);
+
+      if (memoryResult.exitCode === 0 && memoryResult.stdout.trim()) {
+        const [usedStr, totalStr] = memoryResult.stdout.trim().split(',').map((value) => value.trim());
+        const used = parseFloat(usedStr);
+        const total = parseFloat(totalStr);
+
+        if (!Number.isNaN(used) && !Number.isNaN(total) && total > 0) {
+          const estimate = Math.min(100, Math.max(0, Math.round((used / total) * 100)));
+          logger.info(
+            `Modal GPU utilization estimate for ${workerId}: ${estimate}% in ${Date.now() - start}ms`,
+          );
+          return estimate;
+        }
+      }
+
+      return null;
+    } catch (error) {
+      logger.warn(
+        `Modal GPU utilization unavailable for ${workerId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
   getActiveSandboxCount(): number {
     return this.activeSandboxes.size;
+  }
+
+  async fetchPersistentAppLogs(deploymentId: string): Promise<{ stdout: string; stderr: string }> {
+    return ModalAppDeployer.fetchAppLogs(deploymentId);
+  }
+
+  async fetchSandboxLogs(workerId: string): Promise<{ stdout: string; stderr: string }> {
+    const start = Date.now();
+
+    try {
+      const result = await this.execInSandbox(workerId, [
+        'sh',
+        '-c',
+        'if [ -f /tmp/auraops-agent.log ]; then tail -n 200 /tmp/auraops-agent.log; fi',
+      ]);
+
+      logger.info(`Fetched sandbox logs for ${workerId} in ${Date.now() - start}ms`);
+      return { stdout: result.stdout, stderr: result.stderr };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.warn(`Sandbox log fetch failed for ${workerId}: ${msg}`);
+      return { stdout: '', stderr: msg };
+    }
   }
 
   /**
@@ -198,7 +282,7 @@ export class ModalProvider extends BaseGPUProvider {
   async deployPersistentApp(
     deploymentId: string,
     blueprint: BlueprintJSON,
-    deployConfig?: { skipPipInstall?: boolean; cachedImageRef?: string },
+    deployConfig?: { skipPipInstall?: boolean; cachedImageRef?: string; gpuCount?: number; enableMcp?: boolean },
   ): Promise<{ endpointUrl: string; appName: string; imageRef: string }> {
     const start = Date.now();
 
@@ -247,8 +331,9 @@ export class ModalProvider extends BaseGPUProvider {
         `Deploying with ${skipPipInstall ? 'cached' : 'fresh'} image for ${blueprint.framework.framework}:${blueprint.framework.version}`,
       );
 
+      const gpuCount = deployConfig?.gpuCount ?? 1;
       logger.info(
-        `Deploying persistent Modal app: deploymentId=${deploymentId}, framework=${blueprint.framework.framework}`,
+        `Deploying persistent Modal app: deploymentId=${deploymentId}, framework=${blueprint.framework.framework}, gpus=${gpuCount}`,
       );
 
       // Step 1: Generate modal_app.py
@@ -308,11 +393,6 @@ export class ModalProvider extends BaseGPUProvider {
   async stopPersistentApp(deploymentId: string): Promise<void> {
     try {
       this.requireConnection();
-
-      const deployed = this.deployedApps.get(deploymentId);
-      if (!deployed) {
-        throw new DeploymentError(`Modal app not found: ${deploymentId}`);
-      }
 
       await ModalAppDeployer.stopApp(deploymentId);
       this.deployedApps.delete(deploymentId);

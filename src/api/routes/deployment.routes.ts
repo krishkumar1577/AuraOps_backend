@@ -1,13 +1,25 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
-import crypto from 'crypto';
-import { Orchestrator, DeploymentStatus, DeploymentRecord } from '../../services/orchestration';
+import {
+  Orchestrator,
+  DeploymentRecord,
+  DeploymentLogEntry,
+} from '../../services/orchestration';
 import { RedisWeightRegistry } from '../../services/swr/redisClient';
+import { ImageLayerCache } from '../../services/swr/imageLayerCache';
+import { ModalAppDeployer } from '../../services/orchestration/modalAppDeployer';
 import { DeploymentError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { config } from '../../utils/config';
 import type { BlueprintJSON } from '../../types/blueprint.types';
+import { deployTelemetry } from '../../services/telemetry/deployTelemetry';
+import {
+  generateMcpServerCard,
+  generateClaudeDesktopConfig,
+  serializeClaudeDesktopConfig,
+  type ClaudeDesktopConfig,
+} from '../../services/mcp/mcpCardGenerator';
 
 // Zod schemas for request validation
 const GPURequirementsSchema = z.object({
@@ -42,6 +54,8 @@ const DeployRequestSchema = z.object({
   lockfilePath: z.string(),
   environmentHash: z.string().min(1, 'Environment hash required'),
   gpuRequirements: GPURequirementsSchema,
+  gpuCount: z.number().int().min(1, 'GPU count must be at least 1').max(8, 'GPU count cannot exceed 8').optional().default(1),
+  enableMcp: z.boolean().optional().default(false),
 });
 
 const DeploymentIdParamSchema = z.object({
@@ -50,16 +64,57 @@ const DeploymentIdParamSchema = z.object({
 
 type DeployRequest = z.infer<typeof DeployRequestSchema>;
 
+function buildLifecycleLogs(deployment: DeploymentRecord): DeploymentLogEntry[] {
+  const logs: DeploymentLogEntry[] = [];
+  const startMs = deployment.startTime;
+
+  logs.push({
+    timestamp: new Date(startMs).toISOString(),
+    level: 'info',
+    message: `Deployment ${deployment.deploymentId} initiated`,
+  });
+  logs.push({
+    timestamp: new Date(startMs + 100).toISOString(),
+    level: 'info',
+    message: `Worker ${deployment.workerId} acquired`,
+  });
+  logs.push({
+    timestamp: new Date(startMs + 500).toISOString(),
+    level: 'info',
+    message: `Agent ${deployment.agentId} deploying to worker`,
+  });
+
+  if (deployment.status === 'running') {
+    logs.push({
+      timestamp: new Date(startMs + deployment.estimatedTime).toISOString(),
+      level: 'info',
+      message: 'Health check passed — agent is live',
+    });
+  }
+
+  if (deployment.status === 'failed' && deployment.error) {
+    logs.push({
+      timestamp: new Date(startMs + deployment.estimatedTime).toISOString(),
+      level: 'error',
+      message: deployment.error,
+    });
+  }
+
+  return logs;
+}
+
 let redisRegistry: RedisWeightRegistry;
+let imageLayerCache: ImageLayerCache;
 
 export async function deploymentRoutes(
   fastify: FastifyInstance,
   orchestrator: Orchestrator,
 ): Promise<void> {
-  // Initialize Redis registry for weight cache
+  // Initialize Redis registry for weight + image layer cache
   const initStart = Date.now();
   try {
     redisRegistry = new RedisWeightRegistry();
+    imageLayerCache = new ImageLayerCache(redisRegistry);
     logger.info(`✓ Weight cache registry initialized (${Date.now() - initStart}ms)`);
   } catch (error) {
     const err = error instanceof Error ? error.message : String(error);
@@ -97,45 +152,52 @@ export async function deploymentRoutes(
 
         const {
           blueprintJson,
+          gpuCount,
+          enableMcp,
         } = validatedData;
 
         const deploymentId = uuidv4();
         const agentId = uuidv4();
+        const userEmail = (request.user as { email?: string } | undefined)?.email;
+
+        if (userEmail) {
+          deployTelemetry.trackEventAsync({
+            email: userEmail,
+            eventName: 'deploy_started',
+            properties: {
+              framework: blueprintJson.framework?.framework ?? 'unknown',
+              gpuCount,
+            },
+          });
+        }
 
         logger.info(
-          `Starting Modal deployment: deploymentId=${deploymentId}, framework=${blueprintJson.framework?.framework}`,
+          `Starting Modal deployment: deploymentId=${deploymentId}, framework=${blueprintJson.framework?.framework}, gpus=${gpuCount}`,
         );
 
-        // Generate cache key from blueprint
-        const blueprintHash = crypto.createHash('sha256')
-          .update(JSON.stringify({
-            framework: blueprintJson.framework?.framework,
-            version: blueprintJson.framework?.version,
-            deps: blueprintJson.dependencyLock || {}
-          }))
-          .digest('hex');
+        const gpuType = ModalAppDeployer.selectGPU(
+          blueprintJson.deploymentConfig?.gpuMemoryGB ?? 24,
+        );
 
-        const cacheKey = `weight-cache:${blueprintHash}`;
+        // KRI-19: S3-backed image layer cache lookup
         const cacheStartTime = Date.now();
-
-        // Check weight cache
         let cachedImageRef: string | null = null;
         const deployConfig: Record<string, unknown> = {};
 
         try {
-          if (redisRegistry) {
-            cachedImageRef = await redisRegistry.getWeightCache(cacheKey);
+          if (imageLayerCache) {
+            cachedImageRef = await imageLayerCache.lookup(blueprintJson as BlueprintJSON);
           }
         } catch (error) {
           logger.warn(`Cache lookup failed, will proceed without cache: ${error instanceof Error ? error.message : String(error)}`);
         }
 
         if (cachedImageRef) {
-          logger.info(`✓ Cache hit for ${blueprintJson.framework?.framework}:${blueprintJson.framework?.version} (hash: ${blueprintHash.substring(0, 8)}...)`);
+          logger.info(`✓ Image layer cache hit for ${blueprintJson.framework?.framework}:${blueprintJson.framework?.version}`);
           deployConfig.skipPipInstall = true;
           deployConfig.cachedImageRef = cachedImageRef;
         } else {
-          logger.info(`○ Cache miss for ${blueprintJson.framework?.framework}:${blueprintJson.framework?.version} — will cache after deploy`);
+          logger.info(`○ Image layer cache miss for ${blueprintJson.framework?.framework}:${blueprintJson.framework?.version}`);
           deployConfig.skipPipInstall = false;
         }
 
@@ -150,23 +212,23 @@ export async function deploymentRoutes(
           const result = await orchestrator.deployPersistentModal(
             deploymentId,
             blueprintJson as BlueprintJSON,
+            { ...deployConfig, gpuCount, enableMcp },
           );
           endpointUrl = result.endpointUrl;
           appName = result.appName;
-          imageRef = result.appName || result.endpointUrl;
+          imageRef = result.imageRef || result.appName || result.endpointUrl;
 
           const deployTime = Date.now() - startTime;
           logger.info(
             `✓ Persistent Modal endpoint deployed in ${deployTime}ms: ${endpointUrl}`,
           );
 
-          // Cache on success if not already cached
-          if (endpointUrl && !cachedImageRef && imageRef && redisRegistry) {
+          // Cache image layer on success if not already cached
+          if (endpointUrl && !cachedImageRef && imageRef && imageLayerCache) {
             try {
-              await redisRegistry.setWeightCache(cacheKey, imageRef);
-              logger.info(`✓ Cached ${blueprintJson.framework?.framework}:${blueprintJson.framework?.version} for 30 days`);
+              await imageLayerCache.register(blueprintJson as BlueprintJSON, imageRef);
             } catch (error) {
-              logger.warn(`Failed to cache result: ${error instanceof Error ? error.message : String(error)}`);
+              logger.warn(`Failed to cache image layer: ${error instanceof Error ? error.message : String(error)}`);
             }
           }
         } catch (error) {
@@ -181,6 +243,23 @@ export async function deploymentRoutes(
         const deployTime = Date.now() - startTime;
         const cacheStatus = cachedImageRef ? 'HIT' : 'MISS';
         logger.info(`Deploy completed in ${deployTime}ms (cache: ${cacheStatus}, lookup: ${Date.now() - cacheStartTime}ms)`);
+
+        let mcpCard: Record<string, unknown> | undefined;
+        let claudeConfig: ClaudeDesktopConfig | undefined;
+
+        if (enableMcp && endpointUrl) {
+          const card = generateMcpServerCard({
+            deploymentId,
+            endpointUrl,
+            agentName: blueprintJson.framework?.framework,
+          });
+          mcpCard = card as unknown as Record<string, unknown>;
+          claudeConfig = generateClaudeDesktopConfig({
+            deploymentId,
+            endpointUrl,
+            agentName: blueprintJson.framework?.framework,
+          });
+        }
 
         // Store in Redis via orchestrator
         const deployment = {
@@ -197,9 +276,29 @@ export async function deploymentRoutes(
           appName,
           endpointStatus: endpointUrl ? 'live' as const : 'failed' as const,
           error: modalError,
+          gpuCount,
+          gpuType,
+          mcpEnabled: enableMcp && !!endpointUrl,
+          mcpCard,
         } satisfies DeploymentRecord;
 
         await orchestrator.saveDeploymentRecord(deployment);
+
+        if (userEmail) {
+          const eventName = endpointUrl ? 'deploy_succeeded' : 'deploy_failed';
+          deployTelemetry.trackEventAsync({
+            email: userEmail,
+            eventName,
+            properties: {
+              deploymentId,
+              framework: blueprintJson.framework?.framework ?? 'unknown',
+              deployTimeMs: deployTime,
+              gpuType,
+              gpuCount,
+              cacheHit: !!cachedImageRef,
+            },
+          });
+        }
 
         return reply.code(endpointUrl ? 201 : 500).send({
           success: !!endpointUrl,
@@ -210,7 +309,14 @@ export async function deploymentRoutes(
           endpoint_status: endpointUrl ? 'live' : 'failed',
           modal_deployment_error: modalError ?? null,
           framework: blueprintJson.framework?.framework,
+          gpuCount,
           deployTime: `${deployTime}ms`,
+          mcp_enabled: enableMcp && !!endpointUrl,
+          mcp_card: mcpCard ?? null,
+          claude_desktop_config: claudeConfig ?? null,
+          claude_desktop_config_json: claudeConfig
+            ? serializeClaudeDesktopConfig(claudeConfig)
+            : null,
         });
       } catch (error) {
         const err = error instanceof DeploymentError ? error : new DeploymentError(
@@ -270,6 +376,7 @@ export async function deploymentRoutes(
             endpointUrl: deployment.endpointUrl,
             appName: deployment.appName,
             endpoint_status: deployment.endpointStatus ?? (deployment.endpointUrl ? 'live' : 'pending'),
+            gpuCount: deployment.gpuCount ?? 1,
           });
         }
 
@@ -290,6 +397,7 @@ export async function deploymentRoutes(
           endpointUrl: deployment.endpointUrl,
           appName: deployment.appName,
           endpoint_status: deployment.endpointStatus ?? (deployment.endpointUrl ? 'live' : 'pending'),
+          gpuCount: deployment.gpuCount ?? 1,
           error: agentStatus.error,
         });
       } catch (error) {
@@ -339,23 +447,37 @@ export async function deploymentRoutes(
           `Releasing deployment: deploymentId=${deploymentId}, workerId=${deployment.workerId}`,
         );
 
-        // Release worker
+        // Stop Modal app (KRI-15: best-effort, no sandbox to release)
         const startTime = Date.now();
-        try {
-          await orchestrator.releaseWorker(deployment.workerId);
-          const releaseTime = Date.now() - startTime;
-          logger.info(`✓ Worker released in ${releaseTime}ms: ${deployment.workerId}`);
-        } catch (error) {
-          const err = error instanceof DeploymentError ? error : new DeploymentError(
-            error instanceof Error ? error.message : 'Failed to release worker',
-            { deploymentId, workerId: deployment.workerId },
-          );
-
-          logger.error(`Worker release error: ${err.message}`);
-          // Don't fail the request, just log the error
+        if (deployment.workerId.startsWith('modal-')) {
+          try {
+            await orchestrator.stopPersistentModal(deploymentId);
+            logger.info(`✓ Modal app stopped: ${deploymentId}`);
+          } catch (error) {
+            logger.warn(
+              `Modal stop failed (best effort): ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        } else {
+          try {
+            await orchestrator.releaseWorker(deployment.workerId);
+            logger.info(`✓ Worker released: ${deployment.workerId}`);
+          } catch (error) {
+            logger.warn(
+              `Worker release failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
         }
 
-        // Remove deployment record
+        try {
+          await orchestrator.terminateAgent(deployment.agentId);
+        } catch (error) {
+          logger.warn(
+            `Agent terminate failed (best effort): ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+
+        // Remove deployment record + active registration
         await orchestrator.deleteDeploymentRecord(deploymentId);
 
         const totalTime = Date.now() - startTime;
@@ -410,40 +532,14 @@ export async function deploymentRoutes(
           });
         }
 
-        const logs: Array<{ timestamp: string; level: string; message: string }> = [];
-        const startMs = deployment.startTime;
+        const start = Date.now();
+        const lifecycleLogs = buildLifecycleLogs(deployment);
+        const containerLogs = await orchestrator.getContainerLogs(deployment);
+        const logs = [...lifecycleLogs, ...containerLogs];
 
-        logs.push({
-          timestamp: new Date(startMs).toISOString(),
-          level: 'info',
-          message: `Deployment ${deploymentId} initiated`,
-        });
-        logs.push({
-          timestamp: new Date(startMs + 100).toISOString(),
-          level: 'info',
-          message: `Worker ${deployment.workerId} acquired`,
-        });
-        logs.push({
-          timestamp: new Date(startMs + 500).toISOString(),
-          level: 'info',
-          message: `Agent ${deployment.agentId} deploying to worker`,
-        });
-
-        if (deployment.status === 'running') {
-          logs.push({
-            timestamp: new Date(startMs + deployment.estimatedTime).toISOString(),
-            level: 'info',
-            message: 'Health check passed — agent is live',
-          });
-        }
-
-        if (deployment.status === 'failed' && deployment.error) {
-          logs.push({
-            timestamp: new Date(startMs + deployment.estimatedTime).toISOString(),
-            level: 'error',
-            message: deployment.error,
-          });
-        }
+        logger.info(
+          `✓ Deployment logs retrieved in ${Date.now() - start}ms: deploymentId=${deploymentId}, total=${logs.length}`,
+        );
 
         return reply.code(200).send({
           success: true,
@@ -482,31 +578,40 @@ export async function deploymentRoutes(
         const startTime = Date.now();
         logger.info('Listing all deployed agents');
 
-        // Get all deployment statuses from orchestrator
-        let orchestratorDeployments: DeploymentStatus[] = [];
+        let records: DeploymentRecord[] = [];
         try {
-          orchestratorDeployments = await orchestrator.listDeployments();
+          records = await orchestrator.listDeploymentRecords();
         } catch (error) {
           logger.warn(
-            `Failed to list deployments from orchestrator: ${error instanceof Error ? error.message : 'unknown'}`,
+            `Failed to list deployment records: ${error instanceof Error ? error.message : 'unknown'}`,
           );
-          orchestratorDeployments = [];
         }
 
-        // Map to agent list format
-        const cachedDeployments = await orchestrator.listDeploymentRecords();
-        const agents = orchestratorDeployments.map(dep => {
-          const deployment = cachedDeployments.find((cached) => cached.agentId === dep.agentId);
-          return {
-            deploymentId: deployment?.deploymentId || 'unknown',
-            agentId: dep.agentId,
-            status: dep.status,
-            gpuType: 'gpu', // Would come from worker info in production
-            uptime: dep.startTime ? Date.now() - dep.startTime : 0,
-            gpuUtilization: dep.gpuUtilization ?? null,
-            workerId: dep.workerId,
-          };
-        });
+        const agents = await Promise.all(
+          records.map(async (dep) => {
+            let gpuUtilization: number | null = null;
+            let status = dep.status;
+            try {
+              const live = await orchestrator.getDeploymentStatus(dep.agentId);
+              gpuUtilization = live.gpuUtilization ?? null;
+              status = live.status;
+            } catch {
+              // Use cached record values
+            }
+
+            return {
+              deploymentId: dep.deploymentId,
+              agentId: dep.agentId,
+              status,
+              gpuType: dep.gpuType ?? 'T4',
+              gpuCount: dep.gpuCount ?? 1,
+              uptime: dep.startTime ? Date.now() - dep.startTime : 0,
+              gpuUtilization,
+              workerId: dep.workerId,
+              endpointUrl: dep.endpointUrl ?? null,
+            };
+          }),
+        );
 
         const responseTime = Date.now() - startTime;
         logger.info(`✓ Listed ${agents.length} agents in ${responseTime}ms`);
@@ -612,6 +717,116 @@ export async function deploymentRoutes(
           success: false,
           error: err.message,
         });
+      }
+    },
+  );
+
+  /**
+   * GET /api/v1/deployment/:deploymentId/mcp/card
+   * MCP server card discovery
+   */
+  fastify.get<{ Params: unknown }>(
+    '/api/v1/deployment/:deploymentId/mcp/card',
+    async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      try {
+        const params = request.params as Record<string, string>;
+        const { deploymentId } = DeploymentIdParamSchema.parse(params);
+        const deployment = await orchestrator.getDeploymentRecord(deploymentId);
+
+        if (!deployment?.mcpEnabled || !deployment.endpointUrl) {
+          return reply.code(404).send({
+            success: false,
+            error: 'MCP not enabled for this deployment',
+            deploymentId,
+          });
+        }
+
+        const card = deployment.mcpCard ?? generateMcpServerCard({
+          deploymentId,
+          endpointUrl: deployment.endpointUrl,
+        });
+
+        return reply
+          .header('Content-Type', 'application/json')
+          .code(200)
+          .send(card);
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.code(400).send({ success: false, error: 'Invalid deployment ID' });
+        }
+        throw error;
+      }
+    },
+  );
+
+  /**
+   * GET /api/v1/deployment/:deploymentId/mcp/config
+   * Claude Desktop copy-paste config
+   */
+  fastify.get<{ Params: unknown }>(
+    '/api/v1/deployment/:deploymentId/mcp/config',
+    async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      try {
+        const params = request.params as Record<string, string>;
+        const { deploymentId } = DeploymentIdParamSchema.parse(params);
+        const deployment = await orchestrator.getDeploymentRecord(deploymentId);
+
+        if (!deployment?.mcpEnabled || !deployment.endpointUrl) {
+          return reply.code(404).send({
+            success: false,
+            error: 'MCP not enabled for this deployment',
+            deploymentId,
+          });
+        }
+
+        const config = generateClaudeDesktopConfig({
+          deploymentId,
+          endpointUrl: deployment.endpointUrl,
+        });
+
+        return reply.code(200).send({
+          success: true,
+          deploymentId,
+          config,
+          config_json: serializeClaudeDesktopConfig(config),
+          install_path: '~/Library/Application Support/Claude/claude_desktop_config.json',
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return reply.code(400).send({ success: false, error: 'Invalid deployment ID' });
+        }
+        throw error;
+      }
+    },
+  );
+
+  /**
+   * GET /.well-known/mcp/:deploymentId.json
+   * Public MCP card discovery (no auth — card contains only public endpoint URLs)
+   */
+  fastify.get<{ Params: unknown }>(
+    '/.well-known/mcp/:deploymentId.json',
+    async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      try {
+        const params = request.params as Record<string, string>;
+        const { deploymentId } = DeploymentIdParamSchema.parse(params);
+        const deployment = await orchestrator.getDeploymentRecord(deploymentId);
+
+        if (!deployment?.mcpEnabled || !deployment.endpointUrl) {
+          return reply.code(404).send({ error: 'MCP card not found' });
+        }
+
+        const card = deployment.mcpCard ?? generateMcpServerCard({
+          deploymentId,
+          endpointUrl: deployment.endpointUrl,
+        });
+
+        return reply
+          .header('Content-Type', 'application/json')
+          .code(200)
+          .send(card);
+      } catch {
+        return reply.code(404).send({ error: 'MCP card not found' });
       }
     },
   );

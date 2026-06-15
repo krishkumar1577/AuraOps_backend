@@ -23,6 +23,7 @@ import type { BlueprintJSON } from '../../src/types/blueprint.types';
 // Mock Redis client with persistence
 const redisStore = new Map<string, string>();
 const redisSetStore = new Map<string, Set<string>>();
+const redisListStore = new Map<string, string[]>();
 
 jest.mock('redis', () => ({
   createClient: jest.fn(() => ({
@@ -54,6 +55,24 @@ jest.mock('redis', () => ({
       return Promise.resolve(had ? 1 : 0);
     }),
     sMembers: jest.fn((key: string) => Promise.resolve(Array.from(redisSetStore.get(key) ?? []))),
+    rPush: jest.fn((key: string, ...values: string[]) => {
+      const list = redisListStore.get(key) ?? [];
+      list.push(...values);
+      redisListStore.set(key, list);
+      return Promise.resolve(list.length);
+    }),
+    lRange: jest.fn((key: string, start: number, stop: number) => {
+      const list = redisListStore.get(key) ?? [];
+      const normalizedStop = stop < 0 ? list.length + stop : stop;
+      return Promise.resolve(list.slice(start, normalizedStop + 1));
+    }),
+    expire: jest.fn((_key: string, _seconds: number) => Promise.resolve(true)),
+    lTrim: jest.fn((key: string, start: number, stop: number) => {
+      const list = redisListStore.get(key) ?? [];
+      const normalizedStop = stop < 0 ? list.length + stop : stop;
+      redisListStore.set(key, list.slice(start, normalizedStop + 1));
+      return Promise.resolve('OK');
+    }),
   })),
 }));
 
@@ -176,6 +195,10 @@ class MockGPUProvider implements GPUProvider {
     return this.workers.has(workerId);
   }
 
+  async getGpuUtilization(_workerId: string): Promise<number | null> {
+    return null;
+  }
+
   getWorkerCount(): number {
     return this.workers.size;
   }
@@ -286,6 +309,24 @@ describe('Phase 4: GPU Deployment Orchestration Integration', () => {
         return Promise.resolve(had ? 1 : 0);
       }),
       sMembers: jest.fn((key: string) => Promise.resolve(Array.from(redisSetStore.get(key) ?? []))),
+      rPush: jest.fn((key: string, ...values: string[]) => {
+        const list = redisListStore.get(key) ?? [];
+        list.push(...values);
+        redisListStore.set(key, list);
+        return Promise.resolve(list.length);
+      }),
+      lRange: jest.fn((key: string, start: number, stop: number) => {
+        const list = redisListStore.get(key) ?? [];
+        const normalizedStop = stop < 0 ? list.length + stop : stop;
+        return Promise.resolve(list.slice(start, normalizedStop + 1));
+      }),
+      expire: jest.fn((_key: string, _seconds: number) => Promise.resolve(true)),
+      lTrim: jest.fn((key: string, start: number, stop: number) => {
+        const list = redisListStore.get(key) ?? [];
+        const normalizedStop = stop < 0 ? list.length + stop : stop;
+        redisListStore.set(key, list.slice(start, normalizedStop + 1));
+        return Promise.resolve('OK');
+      }),
     };
 
     // Initialize orchestrator with multiple providers
@@ -304,6 +345,7 @@ describe('Phase 4: GPU Deployment Orchestration Integration', () => {
     // Clear Redis store for data persistence tests
     redisStore.clear();
     redisSetStore.clear();
+    redisListStore.clear();
     
     // Clear all providers between tests
     lambdaLabsProvider.clear();
@@ -693,7 +735,7 @@ describe('Phase 4: GPU Deployment Orchestration Integration', () => {
 
       const status = await orchestrator.getDeploymentStatus(deployment.agentId);
 
-      expect(status?.gpuUtilization).toBeUndefined();
+      expect(status?.gpuUtilization).toBeNull();
     });
 
     it('should track memory usage', async () => {

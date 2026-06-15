@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quickstart — AuraOps Docs</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <nav>
+    <a href="index.html" class="logo">AuraOps</a>
+    <div class="links">
+      <a href="index.html">Docs</a>
+      <a href="quickstart.html" class="active">Quickstart</a>
+      <a href="api.html">API</a>
+    </div>
+  </nav>
+
+  <main>
+    <h1>Quickstart</h1>
+    <p class="lead">Deploy your first AI agent to a real GPU in under 90 seconds.</p>
+
+    <h2>1. Install</h2>
+    <pre>npm install -g auraops</pre>
+
+    <h2>2. Register</h2>
+    <pre>curl -X POST https://auraops-backend-production.up.railway.app/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"yourpassword"}'</pre>
+    <p>Copy the <code>token</code> from the response.</p>
+
+    <h2>3. Set your token</h2>
+    <pre>export AURAOPS_API_TOKEN=your_token_here</pre>
+
+    <h2>4. Deploy a Python file</h2>
+    <pre>auraops deploy my_agent.py</pre>
+    <p>No requirements.txt needed. AuraOps scans your imports and infers the environment.</p>
+
+    <h2>5. Check status</h2>
+    <pre>auraops status &lt;deployment-id&gt;</pre>
+
+    <h2>6. Hit your live endpoint</h2>
+    <pre>curl -X POST https://your-endpoint.modal.run \
+  -H "Content-Type: application/json" \
+  -d '{"input": "hello world"}'</pre>
+
+    <h2>Advanced options</h2>
+    <pre># Multi-GPU
+auraops deploy agent.py --gpus 4
+
+# MCP server endpoint
+auraops deploy agent.py --mcp
+
+# Deploy entire crew
+auraops deploy --fleet crew.yaml
+
+# Initialize existing project
+auraops init ./my-ml-project</pre>
+
+    <h2>Local development</h2>
+    <pre>git clone https://github.com/krishkumar1577/AuraOps_backend
+cd AuraOps_backend
+npm install
+cp .env.example .env
+npm run dev</pre>
+  </main>
+
+  <footer>AuraOps Docs · <a href="api.html">API Reference →</a></footer>
+</body>
+</html>

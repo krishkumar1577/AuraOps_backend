@@ -202,6 +202,10 @@ export class LambdaLabsProvider extends BaseGPUProvider {
     }
   }
 
+  async getGpuUtilization(_workerId: string): Promise<number | null> {
+    return null;
+  }
+
   private async getInstance(instanceId: string): Promise<LambdaLabsInstance> {
     const response = await this.client!.get(`/instances/${instanceId}`);
     return response.data.data as LambdaLabsInstance;

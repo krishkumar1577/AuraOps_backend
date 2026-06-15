@@ -20,6 +20,21 @@ jest.mock('../../../services/swr/redisClient', () => ({
   })),
 }));
 
+jest.mock('../../../services/swr/imageLayerCache', () => ({
+  ImageLayerCache: jest.fn().mockImplementation(() => ({
+    lookup: jest.fn().mockResolvedValue(null),
+    register: jest.fn().mockResolvedValue(undefined),
+    computeLayerKey: jest.fn().mockReturnValue('abc123'),
+  })),
+}));
+
+jest.mock('../../../services/telemetry/deployTelemetry', () => ({
+  deployTelemetry: {
+    trackEventAsync: jest.fn(),
+    trackContact: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
 describe('Deployment API Routes', () => {
   let mockFastify: any;
   let mockOrchestrator: jest.Mocked<Orchestrator>;
@@ -50,6 +65,12 @@ describe('Deployment API Routes', () => {
         appName: 'auraops-dep',
       }),
       stopPersistentModal: jest.fn(),
+      terminateAgent: jest.fn(),
+      registerActiveDeployment: jest.fn(),
+      appendDeploymentLog: jest.fn().mockResolvedValue(undefined),
+      getStoredDeploymentLogs: jest.fn().mockResolvedValue([]),
+      refreshContainerLogs: jest.fn().mockResolvedValue(undefined),
+      getContainerLogs: jest.fn().mockResolvedValue([]),
     } as any;
 
     // Create mock Fastify instance
@@ -91,6 +112,122 @@ describe('Deployment API Routes', () => {
         '/api/v1/agents',
         expect.any(Function),
       );
+      expect(mockFastify.get).toHaveBeenCalledWith(
+        '/api/v1/deployment/:deploymentId/logs',
+        expect.any(Function),
+      );
+    });
+  });
+
+  describe('GET /api/v1/deployment/:deploymentId/logs', () => {
+    let logsHandler: any;
+    const deploymentId = '550e8400-e29b-41d4-a716-446655440010';
+    const startTime = Date.now() - 5000;
+
+    beforeEach(async () => {
+      await deploymentRoutes(mockFastify, mockOrchestrator);
+      logsHandler = mockFastify['_get_/api/v1/deployment/:deploymentId/logs'];
+
+      deploymentStore.set(deploymentId, {
+        deploymentId,
+        agentId: 'agent-logs-1',
+        workerId: `modal-${deploymentId}`,
+        status: 'running',
+        startTime,
+        estimatedTime: 2500,
+        blueprintId: '550e8400-e29b-41d4-a716-446655440000',
+        lockfilePath: '/path/to/requirements.lock',
+        environmentHash: 'abc123def456',
+        endpointUrl: 'https://workspace--auraops-dep.modal.run',
+        appName: 'auraops-dep',
+        endpointStatus: 'live',
+      });
+    });
+
+    it('should return lifecycle events before container logs', async () => {
+      mockOrchestrator.getContainerLogs.mockResolvedValue([
+        {
+          timestamp: new Date().toISOString(),
+          level: 'info',
+          message: 'Agent ready in 1.23s',
+          stream: 'stdout',
+        },
+      ]);
+
+      const request = { params: { deploymentId } };
+      await logsHandler(request, mockReply);
+
+      expect(mockReply.code).toHaveBeenCalledWith(200);
+      const response = mockReply.send.mock.calls[0][0];
+      expect(response.success).toBe(true);
+      expect(response.logs[0].message).toContain('initiated');
+      expect(response.logs[response.logs.length - 1].message).toBe('Agent ready in 1.23s');
+      expect(mockOrchestrator.getContainerLogs).toHaveBeenCalledWith(
+        expect.objectContaining({ deploymentId }),
+      );
+    });
+
+    it('should include only lifecycle events when no container logs exist', async () => {
+      mockOrchestrator.getContainerLogs.mockResolvedValue([]);
+
+      const request = { params: { deploymentId } };
+      await logsHandler(request, mockReply);
+
+      const response = mockReply.send.mock.calls[0][0];
+      expect(response.logs).toHaveLength(4);
+      expect(response.logs[0].message).toContain('initiated');
+      expect(response.logs[3].message).toContain('agent is live');
+    });
+
+    it('should include failure lifecycle event for failed deployments', async () => {
+      deploymentStore.set(deploymentId, {
+        ...deploymentStore.get(deploymentId),
+        status: 'failed',
+        error: 'Modal deployment failed',
+        endpointStatus: 'failed',
+      });
+      mockOrchestrator.getContainerLogs.mockResolvedValue([]);
+
+      const request = { params: { deploymentId } };
+      await logsHandler(request, mockReply);
+
+      const response = mockReply.send.mock.calls[0][0];
+      expect(response.logs.some((entry: { message: string }) => entry.message === 'Modal deployment failed')).toBe(true);
+    });
+
+    it('should return 404 for non-existent deployment', async () => {
+      const request = {
+        params: { deploymentId: '550e8400-e29b-41d4-a716-446655440099' },
+      };
+
+      await logsHandler(request, mockReply);
+
+      expect(mockReply.code).toHaveBeenCalledWith(404);
+    });
+
+    it('should validate deployment ID format', async () => {
+      const request = { params: { deploymentId: 'invalid-id' } };
+
+      await logsHandler(request, mockReply);
+
+      expect(mockReply.code).toHaveBeenCalledWith(400);
+      expect(mockReply.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'Invalid deployment ID format',
+        }),
+      );
+    });
+
+    it('should handle container log fetch errors gracefully', async () => {
+      mockOrchestrator.getContainerLogs.mockRejectedValue(
+        new DeploymentError('Failed to get deployment logs'),
+      );
+
+      const request = { params: { deploymentId } };
+      await logsHandler(request, mockReply);
+
+      expect(mockReply.code).toHaveBeenCalledWith(500);
     });
   });
 
@@ -358,6 +495,124 @@ describe('Deployment API Routes', () => {
       );
     });
 
+    it('should default gpuCount to 1 when omitted', async () => {
+      const request = {
+        body: {
+          blueprintId: '550e8400-e29b-41d4-a716-446655440000',
+          blueprintJson: {
+            id: 'blueprint-1',
+            timestamp: new Date().toISOString(),
+            framework: {
+              framework: 'pytorch',
+              version: '2.1.0',
+              cudaVersion: '12.1',
+              pythonVersion: '3.10',
+              primaryUse: 'inference',
+            },
+            systemRequirements: {
+              baseImageId: 'auraops/pytorch',
+              baseImageTag: 'cuda12.1-py3.10',
+            },
+          },
+          lockfilePath: '/path/to/requirements.lock',
+          environmentHash: 'abc123def456',
+          gpuRequirements: {
+            minMemory: 8,
+            framework: 'pytorch',
+            pythonVersion: '3.10',
+          },
+        },
+      };
+
+      await deployHandler(request, mockReply);
+
+      expect(mockOrchestrator.deployPersistentModal).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Object),
+        expect.objectContaining({ gpuCount: 1 }),
+      );
+      expect(mockReply.send).toHaveBeenCalledWith(
+        expect.objectContaining({ gpuCount: 1 }),
+      );
+    });
+
+    it('should pass gpuCount to orchestrator and response', async () => {
+      const request = {
+        body: {
+          blueprintId: '550e8400-e29b-41d4-a716-446655440000',
+          blueprintJson: {
+            id: 'blueprint-1',
+            timestamp: new Date().toISOString(),
+            framework: {
+              framework: 'pytorch',
+              version: '2.1.0',
+              cudaVersion: '12.1',
+              pythonVersion: '3.10',
+              primaryUse: 'inference',
+            },
+            systemRequirements: {
+              baseImageId: 'auraops/pytorch',
+              baseImageTag: 'cuda12.1-py3.10',
+            },
+          },
+          lockfilePath: '/path/to/requirements.lock',
+          environmentHash: 'abc123def456',
+          gpuRequirements: {
+            minMemory: 8,
+            framework: 'pytorch',
+            pythonVersion: '3.10',
+          },
+          gpuCount: 4,
+        },
+      };
+
+      await deployHandler(request, mockReply);
+
+      expect(mockOrchestrator.deployPersistentModal).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Object),
+        expect.objectContaining({ gpuCount: 4 }),
+      );
+      expect(mockReply.send).toHaveBeenCalledWith(
+        expect.objectContaining({ gpuCount: 4 }),
+      );
+    });
+
+    it('should reject gpuCount above 8', async () => {
+      const request = {
+        body: {
+          blueprintId: '550e8400-e29b-41d4-a716-446655440000',
+          blueprintJson: {
+            id: 'blueprint-1',
+            timestamp: new Date().toISOString(),
+            framework: {
+              framework: 'pytorch',
+              version: '2.1.0',
+              cudaVersion: '12.1',
+              pythonVersion: '3.10',
+              primaryUse: 'inference',
+            },
+            systemRequirements: {
+              baseImageId: 'auraops/pytorch',
+              baseImageTag: 'cuda12.1-py3.10',
+            },
+          },
+          lockfilePath: '/path/to/requirements.lock',
+          environmentHash: 'abc123def456',
+          gpuRequirements: {
+            minMemory: 8,
+            framework: 'pytorch',
+            pythonVersion: '3.10',
+          },
+          gpuCount: 9,
+        },
+      };
+
+      await deployHandler(request, mockReply);
+
+      expect(mockReply.code).toHaveBeenCalledWith(400);
+    });
+
     it('should log successful deployment timing', async () => {
       const mockWorker: WorkerInfo = {
         workerId: 'worker-123',
@@ -539,6 +794,29 @@ describe('Deployment API Routes', () => {
       );
     });
 
+    it('should return gpuCount in status response', async () => {
+      const mockStatus: DeploymentStatus = {
+        agentId: 'agent-456',
+        workerId: 'worker-123',
+        status: 'running',
+        startTime: Date.now() - 5000,
+        containerImage: 'auraops/pytorch:cuda12.1-py3.10',
+        lastActivityAt: Date.now(),
+      };
+
+      mockOrchestrator.getDeploymentStatus.mockResolvedValue(mockStatus);
+
+      const request = {
+        params: { deploymentId },
+      };
+
+      await getStatusHandler(request, mockReply);
+
+      expect(mockReply.send).toHaveBeenCalledWith(
+        expect.objectContaining({ gpuCount: 1 }),
+      );
+    });
+
     it('should omit fake GPU metrics in response', async () => {
       const mockStatus: DeploymentStatus = {
         agentId: 'agent-456',
@@ -642,7 +920,8 @@ describe('Deployment API Routes', () => {
           status: 'released',
         }),
       );
-      expect(mockOrchestrator.releaseWorker).toHaveBeenCalled();
+      expect(mockOrchestrator.stopPersistentModal).toHaveBeenCalledWith(deploymentId);
+      expect(mockOrchestrator.terminateAgent).toHaveBeenCalled();
     });
 
     it('should validate deployment ID format', async () => {
@@ -701,49 +980,59 @@ describe('Deployment API Routes', () => {
     });
 
     it('should list all deployed agents', async () => {
-      const mockDeployments: DeploymentStatus[] = [
+      const startTime = Date.now() - 10000;
+      mockOrchestrator.listDeploymentRecords.mockResolvedValue([
         {
+          deploymentId: 'dep-1',
           agentId: 'agent-1',
           workerId: 'worker-1',
           status: 'running',
-          startTime: Date.now() - 10000,
-          containerImage: 'pytorch:2.1',
-          gpuUtilization: 85,
-          lastActivityAt: Date.now(),
+          startTime,
+          estimatedTime: 5000,
+          blueprintId: '550e8400-e29b-41d4-a716-446655440000',
+          lockfilePath: '/path/to/lock',
+          environmentHash: 'hash',
+          gpuType: 'L4',
+          gpuCount: 1,
         },
         {
+          deploymentId: 'dep-2',
           agentId: 'agent-2',
           workerId: 'worker-2',
           status: 'running',
           startTime: Date.now() - 5000,
-          containerImage: 'pytorch:2.1',
-          gpuUtilization: 92,
-          lastActivityAt: Date.now(),
+          estimatedTime: 5000,
+          blueprintId: '550e8400-e29b-41d4-a716-446655440001',
+          lockfilePath: '/path/to/lock',
+          environmentHash: 'hash',
+          gpuType: 'T4',
+          gpuCount: 1,
         },
-      ];
-
-      mockOrchestrator.listDeployments.mockResolvedValue(mockDeployments);
+      ]);
+      mockOrchestrator.getDeploymentStatus.mockImplementation(async (agentId: string) => ({
+        agentId,
+        workerId: agentId === 'agent-1' ? 'worker-1' : 'worker-2',
+        status: 'running' as const,
+        startTime,
+        containerImage: 'pytorch:2.1',
+        gpuUtilization: agentId === 'agent-1' ? 85 : 92,
+        lastActivityAt: Date.now(),
+      }));
 
       const request = { query: {} };
 
-      const startTime = Date.now();
+      const reqStart = Date.now();
       await listAgentsHandler(request, mockReply);
-      const responseTime = Date.now() - startTime;
+      const responseTime = Date.now() - reqStart;
 
-      expect(responseTime).toBeLessThan(50); // API response should be <50ms
+      expect(responseTime).toBeLessThan(50);
       expect(mockReply.code).toHaveBeenCalledWith(200);
       expect(mockReply.send).toHaveBeenCalledWith(
         expect.objectContaining({
           success: true,
           agents: expect.arrayContaining([
-            expect.objectContaining({
-              agentId: 'agent-1',
-              status: 'running',
-            }),
-            expect.objectContaining({
-              agentId: 'agent-2',
-              status: 'running',
-            }),
+            expect.objectContaining({ agentId: 'agent-1', status: 'running' }),
+            expect.objectContaining({ agentId: 'agent-2', status: 'running' }),
           ]),
           total: 2,
         }),
@@ -751,7 +1040,7 @@ describe('Deployment API Routes', () => {
     });
 
     it('should return empty list when no deployments exist', async () => {
-      mockOrchestrator.listDeployments.mockResolvedValue([]);
+      mockOrchestrator.listDeploymentRecords.mockResolvedValue([]);
 
       const request = { query: {} };
 
@@ -767,20 +1056,68 @@ describe('Deployment API Routes', () => {
       );
     });
 
-    it('should include GPU utilization in agent list', async () => {
-      const mockDeployments: DeploymentStatus[] = [
+    it('should include gpuCount in agent list', async () => {
+      mockOrchestrator.listDeploymentRecords.mockResolvedValue([
         {
+          deploymentId: 'dep-1',
           agentId: 'agent-1',
           workerId: 'worker-1',
           status: 'running',
           startTime: Date.now() - 10000,
-          containerImage: 'pytorch:2.1',
-          gpuUtilization: 87,
-          lastActivityAt: Date.now(),
+          estimatedTime: 5000,
+          blueprintId: '550e8400-e29b-41d4-a716-446655440000',
+          lockfilePath: '/path/to/lock',
+          environmentHash: 'hash',
+          gpuCount: 2,
+          gpuType: 'A100',
         },
-      ];
+      ]);
+      mockOrchestrator.getDeploymentStatus.mockResolvedValue({
+        agentId: 'agent-1',
+        workerId: 'worker-1',
+        status: 'running',
+        startTime: Date.now() - 10000,
+        containerImage: 'pytorch:2.1',
+        lastActivityAt: Date.now(),
+      });
 
-      mockOrchestrator.listDeployments.mockResolvedValue(mockDeployments);
+      const request = { query: {} };
+
+      await listAgentsHandler(request, mockReply);
+
+      expect(mockReply.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agents: expect.arrayContaining([
+            expect.objectContaining({ gpuCount: 2 }),
+          ]),
+        }),
+      );
+    });
+
+    it('should include GPU utilization in agent list', async () => {
+      mockOrchestrator.listDeploymentRecords.mockResolvedValue([
+        {
+          deploymentId: 'dep-1',
+          agentId: 'agent-1',
+          workerId: 'worker-1',
+          status: 'running',
+          startTime: Date.now() - 10000,
+          estimatedTime: 5000,
+          blueprintId: '550e8400-e29b-41d4-a716-446655440000',
+          lockfilePath: '/path/to/lock',
+          environmentHash: 'hash',
+          gpuType: 'L4',
+        },
+      ]);
+      mockOrchestrator.getDeploymentStatus.mockResolvedValue({
+        agentId: 'agent-1',
+        workerId: 'worker-1',
+        status: 'running',
+        startTime: Date.now() - 10000,
+        containerImage: 'pytorch:2.1',
+        gpuUtilization: 87,
+        lastActivityAt: Date.now(),
+      });
 
       const request = { query: {} };
 
@@ -798,20 +1135,30 @@ describe('Deployment API Routes', () => {
     });
 
     it('should calculate agent uptime correctly', async () => {
-      const startTime = Date.now() - 30000; // Started 30 seconds ago
-      const mockDeployments: DeploymentStatus[] = [
+      const startTime = Date.now() - 30000;
+      mockOrchestrator.listDeploymentRecords.mockResolvedValue([
         {
+          deploymentId: 'dep-1',
           agentId: 'agent-1',
           workerId: 'worker-1',
           status: 'running',
           startTime,
-          containerImage: 'pytorch:2.1',
-          gpuUtilization: 85,
-          lastActivityAt: Date.now(),
+          estimatedTime: 5000,
+          blueprintId: '550e8400-e29b-41d4-a716-446655440000',
+          lockfilePath: '/path/to/lock',
+          environmentHash: 'hash',
+          gpuType: 'T4',
         },
-      ];
-
-      mockOrchestrator.listDeployments.mockResolvedValue(mockDeployments);
+      ]);
+      mockOrchestrator.getDeploymentStatus.mockResolvedValue({
+        agentId: 'agent-1',
+        workerId: 'worker-1',
+        status: 'running',
+        startTime,
+        containerImage: 'pytorch:2.1',
+        gpuUtilization: 85,
+        lastActivityAt: Date.now(),
+      });
 
       const request = { query: {} };
 
@@ -826,7 +1173,7 @@ describe('Deployment API Routes', () => {
     });
 
     it('should handle orchestrator failure gracefully', async () => {
-      mockOrchestrator.listDeployments.mockRejectedValue(
+      mockOrchestrator.listDeploymentRecords.mockRejectedValue(
         new DeploymentError('Failed to list deployments', {}),
       );
 

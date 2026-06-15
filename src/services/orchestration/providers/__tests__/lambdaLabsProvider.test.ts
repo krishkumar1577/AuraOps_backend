@@ -220,4 +220,11 @@ describe('LambdaLabsProvider', () => {
       await expect(provider.releaseGPU('invalid-worker-id')).rejects.toThrow('Worker not found');
     });
   });
+
+  describe('getGpuUtilization', () => {
+    it('should return null (not yet implemented)', async () => {
+      const utilization = await provider.getGpuUtilization('worker-123');
+      expect(utilization).toBeNull();
+    });
+  });
 });

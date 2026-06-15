@@ -6,7 +6,7 @@
 Parse a Python project, detect its ML framework, and deploy to GPU infrastructure in seconds.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/Tests-645_passing-22c55e)](https://github.com/krishkumar1577/AuraOps_backend)
+[![Tests](https://img.shields.io/badge/Tests-739_passing-22c55e)](https://github.com/krishkumar1577/AuraOps_backend)
 [![Coverage](https://img.shields.io/badge/Coverage-95.7%25-22c55e)](https://github.com/krishkumar1577/AuraOps_backend)
 [![License](https://img.shields.io/badge/License-Apache_2.0-a855f7)](LICENSE)
 
@@ -77,13 +77,15 @@ AuraOps is built for multi-tenant, zero-trust environments:
 - **gVisor security sandbox** — User code runs inside `runsc` (gVisor) isolation. The agent cannot escape the container or compromise the GPU host. Enterprise-safe for multi-tenant deployments.
 - **Health checks** — HTTP liveness/readiness probes with retry and exponential backoff.
 - **REST API** — Fastify server with auth, deploy, status, terminate, logs, and weight cache endpoints.
+- **Live GPU utilization** — Real-time metrics via `nvidia-smi` on Modal sandboxes (0–100%).
+- **Real container log streaming** — Lifecycle events plus stdout/stderr buffered in Redis and fetched from Modal.
+- **Weight SHA256 verification** — Downloaded weights verified against expected hash before S3 upload.
+- **Multi-GPU deployments** — Deploy with `--gpus N` (1–8) via Modal `T4:2`-style GPU specs.
 
-**Not yet implemented:**
+**Future work:**
 
-- Live GPU utilization metrics (currently returns static value).
-- Real container log streaming (logs endpoint returns lifecycle events, not stdout).
-- Weight verification against SHA256 hash on download.
-- Multi-GPU deployments (single GPU per deployment only).
+- GPU metrics for AWS/Lambda Labs providers (Modal supported today).
+- Demo video and npm publish polish.
 
 ---
 
@@ -123,6 +125,9 @@ auraops deploy
 |------|---------|---------|
 | `--provider` | `auto` | `modal`, `lambdalabs`, `aws`, `docker` |
 | `--gpu` | `auto` | `t4`, `l4`, `a10g`, `a100`, `h100` |
+| `--gpus` | `1` | `1`–`8` (multi-GPU count) |
+| `--fleet` | — | Deploy entire crew from `crew.yaml` |
+| `--mcp` | `false` | Auto-generate MCP server endpoint on deploy |
 | `--token` | `$AURAOPS_API_TOKEN` | your API token |
 
 ---
@@ -244,7 +249,7 @@ make help            # Show all Makefile commands
 | Metric | Value |
 |--------|-------|
 | Lines of Code | 25,000+ |
-| Tests | 645 / 654 passing |
+| Tests | 739 / 748 passing |
 | TypeScript Errors | 0 (strict mode) |
 | Real Deploy Time | 4.1s (Tesla T4, Modal) |
 | Build | Zero errors |

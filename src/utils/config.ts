@@ -24,6 +24,7 @@ const EnvSchema = z.object({
   MAX_IDLE_MS: z.coerce.number().int().positive().default(3600000),
   MAX_REQUEST_BODY_BYTES: z.coerce.number().int().positive().default(1048576),
   AWS_ENDPOINT_URL: z.string().optional(),
+  LOOPS_API_KEY: z.string().default(''),
 });
 
 const env = EnvSchema.parse({
@@ -47,6 +48,7 @@ const env = EnvSchema.parse({
   MAX_IDLE_MS: process.env.MAX_IDLE_MS,
   MAX_REQUEST_BODY_BYTES: process.env.MAX_REQUEST_BODY_BYTES,
   AWS_ENDPOINT_URL: process.env.AWS_ENDPOINT_URL,
+  LOOPS_API_KEY: process.env.LOOPS_API_KEY,
 });
 
 if (env.NODE_ENV === 'production' && env.JWT_SECRET === 'change-me-in-development-only') {
@@ -76,6 +78,7 @@ export const config = {
   isDev: env.NODE_ENV === 'development',
   isProd: env.NODE_ENV === 'production',
   aws_endpoint_url: env.AWS_ENDPOINT_URL,
+  loops_api_key: env.LOOPS_API_KEY,
 };
 
 export default config;

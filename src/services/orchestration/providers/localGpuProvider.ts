@@ -160,6 +160,10 @@ export class LocalGPUProvider extends BaseGPUProvider {
     }
   }
 
+  async getGpuUtilization(_workerId: string): Promise<number | null> {
+    return null;
+  }
+
   private parseNvidiaSmiOutput(output: string): void {
     const lines = output.trim().split('\n');
     for (const line of lines) {

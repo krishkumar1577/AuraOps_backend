@@ -1,5 +1,12 @@
 import { FastifyPluginAsync } from 'fastify';
 
+jest.mock('../../../services/telemetry/deployTelemetry', () => ({
+  deployTelemetry: {
+    trackContact: jest.fn().mockResolvedValue(undefined),
+    trackEventAsync: jest.fn(),
+  },
+}));
+
 jest.mock('../../../services/auth/userRepository', () => {
   const users = new Map<string, { _id: { toHexString: () => string }, email: string, passwordHash: string, createdAt: Date }>();
 

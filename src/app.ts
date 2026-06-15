@@ -58,7 +58,8 @@ export async function createApp(): Promise<FastifyInstance> {
     const isPublicRoute =
       request.url === '/' ||
       request.url === '/health' ||
-      request.url.startsWith('/api/v1/auth/');
+      request.url.startsWith('/api/v1/auth/') ||
+      request.url.startsWith('/.well-known/mcp/');
     if (isPublicRoute) {
       return;
     }

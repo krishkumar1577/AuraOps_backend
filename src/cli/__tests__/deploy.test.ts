@@ -60,6 +60,7 @@ describe('CLI: auraops deploy', () => {
     stdoutSpy = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
     stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
     exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+    deployCommand.setOptionValueWithSource('gpus', undefined, 'default');
     jest.clearAllMocks();
   });
 
@@ -169,6 +170,63 @@ describe('CLI: auraops deploy', () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
+  it('should send gpuCount when --gpus is specified', async () => {
+    const blueprintPath = path.join(tmpDir, 'blueprint.json');
+    await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
+
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        deploymentId: 'dep-multi',
+        agentId: 'agent-multi',
+        status: 'running',
+        estimatedTime: 25000,
+        endpoint_url: 'https://workspace--auraops-dep-multi.modal.run',
+        endpoint_status: 'live',
+      },
+    });
+
+    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath, '--gpus', '4']);
+
+    const lastCall = mockedAxios.post.mock.lastCall;
+    expect(lastCall).toBeDefined();
+    const payload = lastCall![1] as Record<string, unknown>;
+    expect(payload.gpuCount).toBe(4);
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('GPUs'));
+  });
+
+  it('should default gpuCount to 1', async () => {
+    const blueprintPath = path.join(tmpDir, 'blueprint.json');
+    await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
+
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        deploymentId: 'dep-single',
+        agentId: 'agent-single',
+        status: 'running',
+        estimatedTime: 25000,
+        endpoint_url: 'https://workspace--auraops-dep-single.modal.run',
+        endpoint_status: 'live',
+      },
+    });
+
+    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath]);
+
+    const lastCall = mockedAxios.post.mock.lastCall;
+    expect(lastCall).toBeDefined();
+    const payload = lastCall![1] as Record<string, unknown>;
+    expect(payload.gpuCount).toBe(1);
+  });
+
+  it('should reject invalid --gpus value', async () => {
+    const blueprintPath = path.join(tmpDir, 'blueprint.json');
+    await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
+
+    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath, '--gpus', '12']);
+
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('GPU count must be'));
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
   it('should send correct GPU requirements', async () => {
     const blueprintPath = path.join(tmpDir, 'blueprint.json');
     await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
@@ -186,8 +244,9 @@ describe('CLI: auraops deploy', () => {
 
     await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath]);
 
-    const callArgs = mockedAxios.post.mock.calls[0];
-    const payload = callArgs[1] as Record<string, unknown>;
+    const lastCall = mockedAxios.post.mock.lastCall;
+    expect(lastCall).toBeDefined();
+    const payload = lastCall![1] as Record<string, unknown>;
     const gpuReqs = payload.gpuRequirements as Record<string, unknown>;
     expect(gpuReqs.minMemory).toBe(8);
     expect(gpuReqs.framework).toBe('pytorch');
@@ -232,5 +291,40 @@ describe('CLI: auraops deploy', () => {
     );
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Waiting for live endpoint'));
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Endpoint'));
+  });
+
+  it('should print Claude Desktop MCP config when --mcp is set', async () => {
+    const blueprintPath = path.join(tmpDir, 'blueprint.json');
+    await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
+
+    const claudeConfig = JSON.stringify({
+      mcpServers: {
+        'auraops-test': {
+          url: 'https://workspace--auraops-dep.modal.run/mcp/tools',
+        },
+      },
+    }, null, 2);
+
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        success: true,
+        deploymentId: '550e8400-e29b-41d4-a716-446655440000',
+        agentId: 'agent-mcp',
+        status: 'running',
+        endpoint_url: 'https://workspace--auraops-dep.modal.run',
+        mcp_enabled: true,
+        claude_desktop_config_json: claudeConfig,
+      },
+    });
+
+    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath, '--mcp']);
+
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ enableMcp: true }),
+      expect.any(Object),
+    );
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('MCP server ready'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('/mcp/tools'));
   });
 });

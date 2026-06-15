@@ -250,6 +250,10 @@ export class AWSGPUProvider extends BaseGPUProvider {
     }
   }
 
+  async getGpuUtilization(_workerId: string): Promise<number | null> {
+    return null;
+  }
+
   private async getInstanceDetails(instanceId: string): Promise<EC2Instance> {
     const response = await this.ec2Client!.send(
       new DescribeInstancesCommand({

@@ -6,6 +6,7 @@ import { deployCommand } from './deploy';
 import { statusCommand } from './status';
 import { logsCommand } from './logs';
 import { terminateCommand } from './terminate';
+import { fleetCommand } from './fleet';
 
 const program = new Command();
 
@@ -19,5 +20,6 @@ program.addCommand(deployCommand);
 program.addCommand(statusCommand);
 program.addCommand(logsCommand);
 program.addCommand(terminateCommand);
+program.addCommand(fleetCommand);
 
 program.parse();

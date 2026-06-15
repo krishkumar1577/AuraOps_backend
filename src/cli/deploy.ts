@@ -1,15 +1,30 @@
-import { Command } from 'commander';
+import { Command, type OptionValueSource } from 'commander';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import axios from 'axios';
 import type { BlueprintJSON } from '../types/blueprint.types';
 import * as ui from './utils';
+import { runFleetDeploy } from './fleet';
 
 interface DeployOptions {
   blueprint?: string;
   provider?: string;
   gpu?: string;
+  gpus?: string;
   token?: string;
+  fleet?: string;
+  mcp?: boolean;
+}
+
+function parseGpuCount(value: string | undefined): number {
+  if (value === undefined) {
+    return 1;
+  }
+  const count = Number.parseInt(value, 10);
+  if (!Number.isInteger(count) || count < 1 || count > 8) {
+    throw new Error('GPU count must be an integer between 1 and 8');
+  }
+  return count;
 }
 
 async function loadBlueprint(blueprintPath: string): Promise<BlueprintJSON> {
@@ -37,7 +52,7 @@ function resolveProjectRoot(blueprintPath: string): string {
     : blueprintDir;
 }
 
-async function runDeploy(options: DeployOptions): Promise<void> {
+async function runDeploy(options: DeployOptions, gpusSource?: OptionValueSource): Promise<void> {
   const start = Date.now();
 
   ui.header('AuraOps Deploy');
@@ -64,6 +79,7 @@ async function runDeploy(options: DeployOptions): Promise<void> {
 
   const apiUrl = ui.resolveApiUrl();
   const headers = ui.getAuthHeaders(options.token);
+  const gpuCount = gpusSource === 'cli' ? parseGpuCount(options.gpus) : 1;
 
   const syncStart = Date.now();
   ui.info('Syncing agent logic...');
@@ -78,6 +94,8 @@ async function runDeploy(options: DeployOptions): Promise<void> {
       framework: blueprint.framework.framework,
       pythonVersion: blueprint.framework.pythonVersion,
     },
+    gpuCount,
+    enableMcp: options.mcp ?? false,
   };
 
   let deployResult: {
@@ -88,6 +106,9 @@ async function runDeploy(options: DeployOptions): Promise<void> {
     endpoint_url?: string;
     endpoint_status?: string;
     modal_deployment_error?: string;
+    mcp_enabled?: boolean;
+    mcp_card?: Record<string, unknown>;
+    claude_desktop_config_json?: string;
   };
 
   try {
@@ -156,6 +177,7 @@ async function runDeploy(options: DeployOptions): Promise<void> {
   ui.label('Status', deployResult.status);
   ui.label('Framework', `${blueprint.framework.framework} ${blueprint.framework.version}`);
   ui.label('GPU Memory', `${blueprint.deploymentConfig.gpuMemoryGB}GB`);
+  ui.label('GPUs', String(gpuCount));
   ui.label('Deploy Time', ui.formatMs(totalTime));
   ui.blank();
   if (deployResult.endpoint_url) {
@@ -167,6 +189,19 @@ async function runDeploy(options: DeployOptions): Promise<void> {
     ui.info(`curl -X POST ${deployResult.endpoint_url} \\`);
     ui.info('  -H "Content-Type: application/json" \\');
     ui.info(`  -d '{"input": "hello"}'`);
+
+    if (options.mcp && deployResult.mcp_enabled) {
+      ui.blank();
+      ui.success('MCP server ready — add to Claude Desktop:');
+      ui.info('~/Library/Application Support/Claude/claude_desktop_config.json');
+      ui.blank();
+      if (deployResult.claude_desktop_config_json) {
+        process.stdout.write(deployResult.claude_desktop_config_json + '\n');
+      }
+      ui.blank();
+      ui.info(`MCP card: GET ${apiUrl}/api/v1/deployment/${deployResult.deploymentId}/mcp/card`);
+      ui.info(`Discovery: GET ${apiUrl}/.well-known/mcp/${deployResult.deploymentId}.json`);
+    }
   } else {
     ui.warn('No live endpoint returned — check Modal credentials');
   }
@@ -179,10 +214,21 @@ export const deployCommand = new Command('deploy')
   .option('-b, --blueprint <path>', 'Path to blueprint.json (default: .auraops/blueprint.json)')
   .option('-p, --provider <name>', 'GPU provider (lambdalabs, aws, local)', 'local')
   .option('-g, --gpu <type>', 'GPU type (e.g. a100, h100, rtx4090)')
+  .option('--gpus <count>', 'Number of GPUs to allocate (1-8)')
   .option('--token <jwt>', 'API authentication token (or set AURAOPS_API_TOKEN)')
-  .action(async (options: DeployOptions) => {
+  .option('--fleet <path>', 'Deploy a multi-agent crew from crew.yaml')
+  .option('--mcp', 'Auto-generate MCP server endpoint on deploy')
+  .action(async (options: DeployOptions, command: Command) => {
     try {
-      await runDeploy(options);
+      if (options.fleet) {
+        await runFleetDeploy({
+          fleet: options.fleet,
+          token: options.token,
+          gpus: options.gpus,
+        });
+        return;
+      }
+      await runDeploy(options, command.getOptionValueSource('gpus'));
     } catch (error: unknown) {
       ui.handleError(error);
     }
