@@ -18,6 +18,26 @@ export interface ParsedManifest {
 export type LangGraphStateType = 'dict' | 'pydantic' | 'dataclass' | 'typeddict' | 'unknown';
 export type LangGraphGpuTier = 'T4' | 'L4' | 'A10G';
 
+export type CrewAIGpuTier = 'T4' | 'L4' | 'A10G';
+export type CrewAIMemoryType = 'short_term' | 'long_term' | 'entity' | 'none';
+
+export interface CrewAIAgentInfo {
+  name: string;
+  toolCount: number;
+}
+
+export interface CrewAIMetadata {
+  detected: true;
+  agentCount: number;
+  totalToolCount: number;
+  agents: CrewAIAgentInfo[];
+  memoryType: CrewAIMemoryType;
+  hasCustomCrewSubclass: boolean;
+  recommendedGpuTier: CrewAIGpuTier;
+  recommendedGpuMemoryGB: 8 | 16 | 24;
+  requiresHumanReview: boolean;
+}
+
 export interface LangGraphMetadata {
   detected: true;
   stateType: LangGraphStateType;
@@ -36,6 +56,7 @@ export interface FrameworkFingerprint {
   pythonVersion: string;
   primaryUse: 'inference' | 'training' | 'agentic';
   langGraph?: LangGraphMetadata;
+  crewAI?: CrewAIMetadata;
 }
 
 export interface BlueprintJSON {

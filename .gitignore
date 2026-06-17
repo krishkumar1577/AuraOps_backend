@@ -53,11 +53,10 @@ weights-cache/
 .claude/
 CLAUDE.md
 
-# Infrastructure (local only)
-infra/
+# Infrastructure (committed — DO NOT ignore)
+# (was previously `infra/` here; removed because infra/ is actively tracked)
 
 # Scripts
-verify-project.sh
 setup.sh
 
 # Internal Documentation

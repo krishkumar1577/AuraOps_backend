@@ -1,0 +1,7 @@
+# Base requirements for LangChain 0.1 + PyTorch 2.1
+# Pinned versions for deterministic builds
+
+pip-tools==7.3.0
+wheel==0.42.0
+setuptools==69.1.0
+packaging==24.0

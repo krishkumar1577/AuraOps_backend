@@ -307,14 +307,82 @@ flowchart TD
     UserCode["🐍 Python Source / Project"] -->|auraops deploy| Ghost["👻 Ghost Manifest\n(Static Import Analysis)"]
     Ghost -->|Blueprint| SysDep["🛠️ System Dep Bridge\n(Inject apt packages)"]
     SysDep -->|Verified Spec| Lock["🔒 Deterministic Lock\n(pip-compile + SHA256)"]
-    
+
     Lock -->|Parallel Check| SWR["📦 Smart Weight Registry\n(Redis/S3 Cache Hit)"]
     Lock -->|Parallel Check| Router["🛰️ Smart Router\n(Modal/AWS/Lambda Labs)"]
-    
+
     SWR & Router -->|Acquire & Mount| Sandbox["🛡️ gVisor Sandbox\n(Isolation Layer)"]
     Sandbox -->|HTTP Probe| Health["✅ Health Check\n(Liveness/Readiness)"]
     Health -->|Deployed| Live["🚀 Agent Live\n(4.1s average)"]
     Live -->|Idle 10m| Reaper["💀 Heartbeat Reaper\n(Scale-to-Zero)"]
+```
+
+> Full architecture breakdown: [`docs/architecture/code-map.md`](docs/architecture/code-map.md) · Full CLI breakdown: [`docs/cli/cli-code-map.md`](docs/cli/cli-code-map.md)
+
+---
+
+## CLI Command Graph
+
+```mermaid
+graph TD
+    A[auraops v0.1.0] --> B[init path]
+    A --> C[deploy -b -p -g --gpus --fleet --mcp]
+    A --> D[status deploymentId]
+    A --> E[logs deploymentId -f -t]
+    A --> F[terminate deploymentId --force]
+    A --> G[fleet crew.yaml --gpus]
+
+    C -->|--fleet| G
+    C -->|POST /api/v1/deploy| API[Fastify API]
+    D -->|GET /api/v1/deployment/:id| API
+    E -->|GET /api/v1/deployment/:id/logs| API
+    F -->|DELETE /api/v1/deployment/:id/stop-modal| API
+    G -->|POST /api/v1/deploy x N| API
+
+    B -->|local only| MP[ManifestParser + FrameworkDetector]
+    MP -->|writes| BP[.auraops/blueprint.json]
+
+    classDef api fill:#1f2937,stroke:#10b981,color:#fff;
+    class API api;
+```
+
+---
+
+## Deploy Request — End-to-End Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User / CLI
+    participant API as Fastify (deployment.routes)
+    participant AUTH as JWT Plugin
+    participant SWR as SWR (Redis + S3)
+    participant IMG as ImageLayerCache
+    participant ORCH as Orchestrator
+    participant MP as ModalProvider
+    participant MAD as ModalAppDeployer
+    participant CLI as `modal deploy` CLI
+    participant LOG as DeploymentLogStore
+
+    U->>API: POST /api/v1/deploy {blueprint, weights, enableMcp}
+    API->>AUTH: requireAuth (Bearer JWT)
+    AUTH-->>API: userId
+    API->>SWR: lookup(weightHash)
+    SWR-->>API: cached or miss
+    API->>IMG: getCachedImageLayer(frameworkHash)
+    IMG-->>API: docker layer digest
+    API->>ORCH: deployPersistentWithFallback(blueprint, weights)
+    ORCH->>MP: deployPersistent(blueprint, weights)
+    MP->>MAD: generate modal_app.py (cached path)
+    MAD-->>MP: modal_app.py
+    MP->>CLI: spawn `modal deploy`
+    CLI-->>MP: https://<id>.modal.run
+    MP-->>ORCH: endpointUrl
+    ORCH->>LOG: append("deployed")
+    ORCH-->>API: DeploymentRecord{endpointUrl}
+    API-->>U: 200 {deploymentId, endpointUrl, mcp?}
+
+    Note over ORCH,MP: On 429 rate-limit → fallback to Azure GPU
 ```
 
 ---
@@ -362,6 +430,146 @@ const deploy = await fetch('https://auraops.run/api/v1/deploy', {
 
 const { endpoint } = await deploy.json();
 console.log(`Agent deployed to gVisor sandbox: ${endpoint}`);
+```
+
+</details>
+
+---
+
+## MCP Server Endpoints
+
+Pass `--mcp` on deploy to auto-generate a [Model Context Protocol](https://modelcontextprotocol.io) server on the same Modal URL. AuraOps mounts a unified FastAPI ASGI stub exposing:
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET`  | `/mcp/health` | Liveness probe (no auth) |
+| `GET`  | `/mcp/tools`  | List registered tools |
+| `POST` | `/mcp/tools/call` | Invoke a tool (JSON-RPC 2.0) |
+| `GET`  | `/.well-known/mcp/:id.json` | Public discovery card (no auth) |
+| `GET`  | `/api/v1/deployment/:id/mcp/card` | Authenticated server card |
+| `GET`  | `/api/v1/deployment/:id/mcp/config` | Claude Desktop config snippet |
+
+**CLI usage**
+
+```bash
+auraops deploy my_agent.py --mcp
+# → server ready, claude_desktop_config.json printed
+```
+
+**Manual discovery** — any MCP client can fetch the public card:
+
+```bash
+curl https://auraops-backend-production.up.railway.app/.well-known/mcp/<deployment-id>.json
+```
+
+The response includes the server name, version, tool manifest, and the upstream `https://<id>.modal.run/mcp` URL.
+
+---
+
+## SDK Integration — MCP
+
+Build MCP-aware clients against the deployed agent. The server speaks JSON-RPC 2.0 over HTTP on the same Modal URL.
+
+<details>
+<summary><strong>Python (requests + jsonrpc)</strong></summary>
+
+```python
+import json
+import requests
+
+DEPLOYMENT_ID = "your-deployment-id"
+MCP_URL = f"https://auraops-backend-production.up.railway.app/mcp/{DEPLOYMENT_ID}"
+
+# 1. Discover tools (no auth)
+tools = requests.get(f"{MCP_URL}/mcp/tools").json()
+print("Available tools:", [t["name"] for t in tools["tools"]])
+
+# 2. Call a tool (JSON-RPC 2.0)
+payload = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+        "name": "run_agent",
+        "arguments": {"input": "summarize this text"}
+    }
+}
+result = requests.post(f"{MCP_URL}/mcp/tools/call", json=payload).json()
+print("Agent response:", result["result"])
+```
+
+</details>
+
+<details>
+<summary><strong>Node.js (fetch + JSON-RPC)</strong></summary>
+
+```javascript
+const DEPLOYMENT_ID = 'your-deployment-id';
+const MCP_URL = `https://auraops-backend-production.up.railway.app/mcp/${DEPLOYMENT_ID}`;
+
+// 1. Discover tools (no auth)
+const tools = await fetch(`${MCP_URL}/mcp/tools`).then(r => r.json());
+console.log('Available tools:', tools.tools.map(t => t.name));
+
+// 2. Call a tool (JSON-RPC 2.0)
+const rpc = await fetch(`${MCP_URL}/mcp/tools/call`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: {
+      name: 'run_agent',
+      arguments: { input: 'summarize this text' }
+    }
+  })
+}).then(r => r.json());
+
+console.log('Agent response:', rpc.result);
+```
+
+</details>
+
+<details>
+<summary><strong>Claude Desktop (one-click config)</strong></summary>
+
+Drop this into `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "auraops-agent": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://<id>.modal.run/mcp"]
+    }
+  }
+}
+```
+
+The same snippet is auto-printed by `auraops deploy --mcp`.
+
+</details>
+
+<details>
+<summary><strong>Raw curl (JSON-RPC 2.0)</strong></summary>
+
+```bash
+# Health check
+curl https://<id>.modal.run/mcp/health
+
+# List tools
+curl https://<id>.modal.run/mcp/tools
+
+# Call a tool
+curl -X POST https://<id>.modal.run/mcp/tools/call \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {"name": "run_agent", "arguments": {"input": "hello"}}
+  }'
 ```
 
 </details>
