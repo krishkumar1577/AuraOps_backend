@@ -1,10 +1,14 @@
 {
   "name": "auraops",
-  "version": "0.1.0",
+  "version": "0.1.1-alpha.1",
   "description": "Deploy AI agents to GPU in seconds",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
     "auraops": "dist/cli/index.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "repository": {
     "type": "git",
@@ -22,6 +26,7 @@
   "scripts": {
     "dev": "ts-node src/index.ts",
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "start": "node dist/index.js",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -35,13 +40,15 @@
     "gpu",
     "orchestration",
     "modal",
-    "cli"
+    "cli",
+    "langgraph",
+    "langchain",
+    "byoc"
   ],
   "author": "Krish",
   "license": "Apache-2.0",
   "dependencies": {
     "@aws-sdk/client-ec2": "^3.1038.0",
-    "@aws-sdk/client-lambda": "^3.0.0",
     "@aws-sdk/client-pricing": "^3.1038.0",
     "@aws-sdk/client-s3": "^3.0.0",
     "@azure/arm-appservice": "^19.0.0",
@@ -63,7 +70,6 @@
     "pino": "^8.16.0",
     "pino-pretty": "^10.2.0",
     "redis": "^4.6.0",
-    "tar": "^6.2.0",
     "toml": "^3.0.0",
     "uuid": "^9.0.0",
     "yaml": "^2.3.0",
