@@ -4,6 +4,7 @@ import * as path from 'path';
 import { ManifestParser } from '../services/blueprinting/manifestParser';
 import { FrameworkDetector } from '../services/blueprinting/frameworkDetector';
 import { BlueprintGenerator } from '../services/blueprinting/blueprintGenerator';
+import type { BlueprintJSON } from '../types/blueprint.types';
 import { LangGraphDetector } from '../services/blueprinting/frameworkDetectors';
 import * as ui from './utils';
 
@@ -53,7 +54,8 @@ export async function runInit(projectPath: string, options: InitOptions): Promis
   );
 
   const genStart = Date.now();
-  const blueprint = generator.generate(fingerprint, manifest, resolvedPath);
+  const blueprint = await generator.generate(fingerprint, manifest, resolvedPath);
+  const entryPointWarning = (blueprint as BlueprintJSON & { _entryPointWarning?: string })._entryPointWarning;
   ui.step(`Blueprint generated (id: ${blueprint.id.slice(0, 8)}...)`, ui.formatMs(Date.now() - genStart));
 
   const outputDir = options.output
@@ -80,6 +82,12 @@ export async function runInit(projectPath: string, options: InitOptions): Promis
   }
   ui.label('Use Case', fingerprint.primaryUse);
   ui.blank();
+  if (entryPointWarning) {
+    ui.blank();
+    ui.warn('Entry-point detection:');
+    ui.info(`  ${entryPointWarning}`);
+  }
+
   ui.success(`Init complete in ${ui.formatMs(Date.now() - start)}`);
 }
 

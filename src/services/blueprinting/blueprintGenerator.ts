@@ -2,13 +2,15 @@ import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
 import type { BlueprintJSON, FrameworkFingerprint, ParsedManifest } from '../../types/blueprint.types';
 import { logger } from '../../utils/logger';
+import { EntryPointDetector } from './entryPointDetector';
 
 export class BlueprintGenerator {
-  generate(
+  async generate(
     fingerprint: FrameworkFingerprint,
     manifest: ParsedManifest,
-    _projectPath: string,
-  ): BlueprintJSON {
+    projectPath: string,
+  ): Promise<BlueprintJSON> {
+    const entryPoint = await new EntryPointDetector().detect(projectPath);
     const baseImage = this.selectBaseImage(fingerprint);
 
     const blueprint: BlueprintJSON = {
@@ -26,7 +28,7 @@ export class BlueprintGenerator {
       },
       customModels: [],
       deploymentConfig: {
-        entrypoint: 'python main.py',
+        entrypoint: `python ${entryPoint.filePath}`,
         runtime: 'python',
         memoryMB: 4096,
         gpuRequired: true,
@@ -37,6 +39,10 @@ export class BlueprintGenerator {
         blueprintHash: '',
       },
     };
+
+    if (entryPoint.warning) {
+      (blueprint as BlueprintJSON & { _entryPointWarning?: string })._entryPointWarning = entryPoint.warning;
+    }
 
     const copy: any = JSON.parse(JSON.stringify(blueprint));
     copy.checksums.blueprintHash = undefined;
