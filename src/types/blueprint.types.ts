@@ -50,7 +50,7 @@ export interface LangGraphMetadata {
 }
 
 export interface FrameworkFingerprint {
-  framework: 'pytorch' | 'langchain' | 'langgraph' | 'transformers' | 'jax' | 'tensorflow';
+  framework: 'pytorch' | 'langchain' | 'langgraph' | 'crewai' | 'transformers' | 'jax' | 'tensorflow';
   version: string;
   cudaVersion: string;
   pythonVersion: string;

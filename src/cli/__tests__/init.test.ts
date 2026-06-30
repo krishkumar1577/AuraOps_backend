@@ -14,6 +14,7 @@ jest.mock('../../utils/logger', () => ({
 import { initCommand, runInit } from '../init';
 
 describe('CLI: auraops init', () => {
+  const fixturesDir = path.resolve(__dirname, '../../../tests/fixtures');
   let tmpDir: string;
   let stdoutSpy: jest.SpyInstance;
   let stderrSpy: jest.SpyInstance;
@@ -148,5 +149,29 @@ numpy = "1.24.0"
     const blueprintPath = path.join(tmpDir, '.auraops', 'blueprint.json');
     const exists = await fs.access(blueprintPath).then(() => true).catch(() => false);
     expect(exists).toBe(true);
+  });
+
+  it('should classify a real CrewAI fixture as crewai through the full init pipeline', async () => {
+    const fixtureDir = path.join(fixturesDir, 'crewai-medium');
+    await fs.copyFile(path.join(fixtureDir, 'crew.py'), path.join(tmpDir, 'crew.py'));
+    await fs.writeFile(
+      path.join(tmpDir, 'requirements.txt'),
+      'crewai==0.11.2\nlangchain==0.2.0\nlangchain-core==0.2.0\nlangchain-community==0.2.0\n',
+    );
+
+    await runInit(tmpDir, {});
+
+    const blueprintPath = path.join(tmpDir, '.auraops', 'blueprint.json');
+    const content = await fs.readFile(blueprintPath, 'utf-8');
+    const blueprint = JSON.parse(content);
+
+    expect(blueprint.framework.framework).toBe('crewai');
+    expect(blueprint.framework.crewAI).toBeDefined();
+    expect(blueprint.framework.crewAI.agentCount).toBe(5);
+    expect(blueprint.framework.crewAI.totalToolCount).toBe(9);
+    expect(blueprint.framework.crewAI.recommendedGpuTier).toBe('L4');
+    expect(blueprint.framework.primaryUse).toBe('agentic');
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('CrewAI detected (5 agents, 9 tools)'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Framework detected: crewai'));
   });
 });

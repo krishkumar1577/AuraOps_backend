@@ -155,4 +155,43 @@ describe('FrameworkDetector', () => {
     expect(result.langGraph).toEqual(langGraphAnalysis);
     expect(result.primaryUse).toBe('agentic');
   });
+
+  it('should prioritize crewai analysis over plain langchain dependencies', () => {
+    const manifest: ParsedManifest = {
+      framework: 'unknown',
+      frameworkVersion: '0.0.0',
+      pythonVersion: '3.11',
+      allDependencies: {
+        crewai: '0.11.2',
+        langchain: '0.2.0',
+        'langchain-core': '0.2.0',
+      },
+      langchainVersion: '0.2.0',
+    };
+
+    const crewAIAnalysis = {
+      detected: true as const,
+      agentCount: 5,
+      totalToolCount: 10,
+      agents: [
+        { name: 'researcher', toolCount: 2 },
+        { name: 'analyst', toolCount: 2 },
+        { name: 'engineer', toolCount: 2 },
+        { name: 'reviewer', toolCount: 1 },
+        { name: 'writer', toolCount: 3 },
+      ],
+      memoryType: 'long_term' as const,
+      hasCustomCrewSubclass: false,
+      recommendedGpuTier: 'L4' as const,
+      recommendedGpuMemoryGB: 16 as const,
+      requiresHumanReview: false,
+    };
+
+    const result = detector.detect(manifest, null, crewAIAnalysis);
+
+    expect(result.framework).toBe('crewai');
+    expect(result.version).toBe('0.11.2');
+    expect(result.crewAI).toEqual(crewAIAnalysis);
+    expect(result.primaryUse).toBe('agentic');
+  });
 });

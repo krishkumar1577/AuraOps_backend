@@ -5,7 +5,7 @@ import { ManifestParser } from '../services/blueprinting/manifestParser';
 import { FrameworkDetector } from '../services/blueprinting/frameworkDetector';
 import { BlueprintGenerator } from '../services/blueprinting/blueprintGenerator';
 import type { BlueprintJSON } from '../types/blueprint.types';
-import { LangGraphDetector } from '../services/blueprinting/frameworkDetectors';
+import { CrewAIDetector, LangGraphDetector } from '../services/blueprinting/frameworkDetectors';
 import * as ui from './utils';
 
 interface InitOptions {
@@ -30,6 +30,7 @@ export async function runInit(projectPath: string, options: InitOptions): Promis
   const parser = new ManifestParser();
   const detector = new FrameworkDetector();
   const langGraphDetector = new LangGraphDetector();
+  const crewAIDetector = new CrewAIDetector();
   const generator = new BlueprintGenerator();
 
   const parseStart = Date.now();
@@ -46,8 +47,17 @@ export async function runInit(projectPath: string, options: InitOptions): Promis
     );
   }
 
+  const crewAIStart = Date.now();
+  const crewAIAnalysis = await crewAIDetector.analyze(resolvedPath);
+  if (crewAIAnalysis) {
+    ui.step(
+      `CrewAI detected (${crewAIAnalysis.agentCount} agents, ${crewAIAnalysis.totalToolCount} tools)`,
+      ui.formatMs(Date.now() - crewAIStart),
+    );
+  }
+
   const detectStart = Date.now();
-  const fingerprint = detector.detect(manifest, langGraphAnalysis);
+  const fingerprint = detector.detect(manifest, langGraphAnalysis, crewAIAnalysis);
   ui.step(
     `Framework detected: ${fingerprint.framework} ${fingerprint.version}`,
     ui.formatMs(Date.now() - detectStart),
@@ -79,6 +89,11 @@ export async function runInit(projectPath: string, options: InitOptions): Promis
       'State Size (est.)',
       `${(fingerprint.langGraph.estimatedStateSizeBytes / 1024).toFixed(1)}KB`,
     );
+  }
+  if (fingerprint.crewAI) {
+    ui.label('GPU Tier', fingerprint.crewAI.recommendedGpuTier);
+    ui.label('Agent Count', String(fingerprint.crewAI.agentCount));
+    ui.label('Tool Count', String(fingerprint.crewAI.totalToolCount));
   }
   ui.label('Use Case', fingerprint.primaryUse);
   ui.blank();

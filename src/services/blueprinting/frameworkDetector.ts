@@ -2,6 +2,7 @@ import type {
   ParsedManifest,
   FrameworkFingerprint,
   LangGraphMetadata,
+  CrewAIMetadata,
 } from '../../types/blueprint.types';
 import { FrameworkDetectionError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
@@ -10,6 +11,7 @@ type SupportedFramework =
   | 'pytorch'
   | 'langchain'
   | 'langgraph'
+  | 'crewai'
   | 'transformers'
   | 'jax'
   | 'tensorflow';
@@ -18,12 +20,13 @@ export class FrameworkDetector {
   detect(
     manifest: ParsedManifest,
     langGraphAnalysis?: LangGraphMetadata | null,
+    crewAIAnalysis?: CrewAIMetadata | null,
   ): FrameworkFingerprint {
-    const framework = this.identifyFramework(manifest, langGraphAnalysis);
+    const framework = this.identifyFramework(manifest, langGraphAnalysis, crewAIAnalysis);
     const version = this.getFrameworkVersion(manifest, framework);
     const cudaVersion = this.determineCudaVersion(manifest, framework);
     const pythonVersion = manifest.pythonVersion;
-    const primaryUse = this.inferPrimaryUse(manifest);
+    const primaryUse = this.inferPrimaryUse(manifest, crewAIAnalysis);
 
     const fingerprint: FrameworkFingerprint = {
       framework,
@@ -36,6 +39,9 @@ export class FrameworkDetector {
     if (framework === 'langgraph' && langGraphAnalysis) {
       fingerprint.langGraph = langGraphAnalysis;
     }
+    if (framework === 'crewai' && crewAIAnalysis) {
+      fingerprint.crewAI = crewAIAnalysis;
+    }
 
     logger.info(
       `Framework detected: ${framework} v${version} (CUDA ${cudaVersion}, Python ${pythonVersion})`,
@@ -47,15 +53,20 @@ export class FrameworkDetector {
   private identifyFramework(
     manifest: ParsedManifest,
     langGraphAnalysis?: LangGraphMetadata | null,
+    crewAIAnalysis?: CrewAIMetadata | null,
   ): SupportedFramework {
     if (langGraphAnalysis?.detected) {
       return 'langgraph';
+    }
+    if (crewAIAnalysis?.detected) {
+      return 'crewai';
     }
 
     const deps = manifest.allDependencies;
 
     const scores = {
       langgraph: this.scoreHit(deps, ['langgraph']),
+      crewai: this.scoreHit(deps, ['crewai']),
       langchain: this.scoreHit(deps, ['langchain', 'langchain-core']),
       pytorch: this.scoreHit(deps, ['torch', 'pytorch']),
       transformers: this.scoreHit(deps, ['transformers', 'huggingface-hub']),
@@ -65,6 +76,7 @@ export class FrameworkDetector {
 
     const hierarchy: SupportedFramework[] = [
       'langgraph',
+      'crewai',
       'langchain',
       'transformers',
       'pytorch',
@@ -78,7 +90,7 @@ export class FrameworkDetector {
 
     if (candidates.length === 0) {
       throw new FrameworkDetectionError(
-        'Could not detect supported framework. Supported: pytorch, langchain, langgraph, transformers, jax, tensorflow',
+        'Could not detect supported framework. Supported: pytorch, langchain, langgraph, crewai, transformers, jax, tensorflow',
       );
     }
 
@@ -97,6 +109,7 @@ export class FrameworkDetector {
       pytorch: manifest.torchVersion || '2.1.0',
       langchain: manifest.langchainVersion || '0.1.0',
       langgraph: manifest.allDependencies['langgraph'] || '0.2.0',
+      crewai: manifest.allDependencies['crewai'] || '0.11.2',
       transformers: manifest.allDependencies['transformers'] || '4.30.0',
       jax: manifest.allDependencies['jax'] || '0.4.0',
       tensorflow: manifest.allDependencies['tensorflow'] || '2.13.0',
@@ -119,6 +132,7 @@ export class FrameworkDetector {
       },
       langchain: { '*': '12.1' },
       langgraph: { '*': '12.1' },
+      crewai: { '*': '12.1' },
       transformers: { '*': '12.1' },
       jax: {
         '0.4': '12.1',
@@ -139,8 +153,13 @@ export class FrameworkDetector {
 
   private inferPrimaryUse(
     manifest: ParsedManifest,
+    crewAIAnalysis?: CrewAIMetadata | null,
   ): 'inference' | 'training' | 'agentic' {
     const deps = manifest.allDependencies;
+
+    if (crewAIAnalysis?.detected || deps['crewai']) {
+      return 'agentic';
+    }
 
     if (
       deps['langchain'] &&
