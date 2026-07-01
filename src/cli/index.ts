@@ -13,7 +13,7 @@ const program = new Command();
 program
   .name('auraops')
   .description('Deploy AI agents to GPU in seconds')
-  .version('0.1.0');
+  .version(require('../../package.json').version);
 
 program.addCommand(initCommand);
 program.addCommand(deployCommand);

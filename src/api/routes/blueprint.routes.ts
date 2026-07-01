@@ -33,7 +33,7 @@ export async function blueprintRoutes(fastify: FastifyInstance) {
         const detectTime = Date.now() - detectStart;
 
         const genStart = Date.now();
-        const blueprint = generator.generate(fingerprint, manifest, projectPath);
+        const blueprint = await generator.generate(fingerprint, manifest, projectPath);
         const genTime = Date.now() - genStart;
 
         logger.info(`Blueprint stored: ${blueprint.id}`);
