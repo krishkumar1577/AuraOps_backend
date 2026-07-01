@@ -86,6 +86,8 @@ class AuraOpsAgent:
     tokenizer = None
     graph = None
     compiled_graph = None
+    crew = None
+    crew_agents = None
 
     @modal.enter()
     def load(self):
@@ -108,6 +110,8 @@ class AuraOpsAgent:
         self.tokenizer = None
         self.graph = None
         self.compiled_graph = None
+        self.crew = None
+        self.crew_agents = None
         print("✓ Agent cleanup complete")
 
 ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
@@ -133,7 +137,7 @@ ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
 
     def _run_inference(self, input_text: str, metadata: dict) -> str:
         """Execute inference based on framework — uses models loaded in load()"""
-        framework = "${blueprint.framework?.framework || 'langchain'}"
+        framework = "${blueprint.framework.framework}"
         
         if framework == "langchain":
             if self.agent is None:
@@ -168,9 +172,20 @@ ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
             result = self.model.predict([input_text])
             return str(result[0])
             
+        elif framework == "crewai":
+            if self.crew is None:
+                raise RuntimeError("CrewAI crew not loaded")
+            try:
+                result = self.crew.kickoff(inputs={"input": input_text})
+                if hasattr(result, "raw"):
+                    return str(result.raw)
+                return str(result)
+            except Exception as e:
+                return f"crewai-error:{e}"
+
         else:
             raise ValueError(
-                f"Unsupported framework: {framework}. Supported: langchain, langgraph, transformers, pytorch, jax, tensorflow"
+                f"Unsupported framework: {framework}. Supported: langchain, langgraph, crewai, transformers, pytorch, jax, tensorflow"
             )
 ${mcpAsgiStub}
 # Health check endpoint
@@ -189,6 +204,7 @@ if __name__ == "__main__":
         blueprint.framework?.framework || 'langchain',
         blueprint.customModels,
         blueprint.framework?.langGraph,
+        blueprint.framework?.crewAI,
       );
 
       return `
@@ -306,9 +322,20 @@ ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
             result = self.model.predict([input_text])
             return str(result[0])
             
+        elif framework == "crewai":
+            if self.crew is None:
+                raise RuntimeError("CrewAI crew not loaded")
+            try:
+                result = self.crew.kickoff(inputs={"input": input_text})
+                if hasattr(result, "raw"):
+                    return str(result.raw)
+                return str(result)
+            except Exception as e:
+                return f"crewai-error:{e}"
+
         else:
             raise ValueError(
-                f"Unsupported framework: {framework}. Supported: langchain, langgraph, transformers, pytorch, jax, tensorflow"
+                f"Unsupported framework: {framework}. Supported: langchain, langgraph, crewai, transformers, pytorch, jax, tensorflow"
             )
 ${mcpAsgiStub}
 # Health check endpoint
@@ -386,6 +413,7 @@ if __name__ == "__main__":
     framework: string,
     customModels?: Array<{ name: string; path: string }>,
     langGraph?: BlueprintJSON['framework']['langGraph'],
+    crewAI?: BlueprintJSON['framework']['crewAI'],
   ): string {
     const indent = '            ';
 
@@ -464,6 +492,41 @@ ${indent}    verbose=True,
 ${indent})
 ${indent}print("✓ LangChain agent initialized")`;
 
+      case 'crewai': {
+        const agentCount = crewAI?.agentCount ?? 0;
+        const totalToolCount = crewAI?.totalToolCount ?? 0;
+        const memoryType = crewAI?.memoryType ?? 'none';
+        // Mirror the LangGraph path: pre-instantiate agents and bind tools
+        // at load() so the first HTTP request skips construction cost.
+        // We build placeholders for the LLM-backed parts; user code can
+        // override self.agents with their real Agent(...) calls.
+        return `${indent}from crewai import Agent, Crew, Task
+${indent}from langchain_openai import ChatOpenAI
+${indent}
+${indent}# Pre-bind shared LLM at load() — not at first invoke
+${indent}llm = ChatOpenAI(model="gpt-4", temperature=0)
+${indent}
+${indent}# Pre-compile tool callables: bind each agent's tools now so the
+${indent}# executor's first call doesn't pay tool-binding cost.
+${indent}self.crew_agents = []
+${indent}self.crew = None
+${indent}try:
+${indent}    # ${memoryType} memory
+${
+  memoryType === 'long_term'
+    ? `${indent}    from crewai.memory import LongTermMemory\n${indent}    memory = LongTermMemory()`
+    : memoryType === 'short_term'
+      ? `${indent}    from crewai.memory import ShortTermMemory\n${indent}    memory = ShortTermMemory()`
+      : memoryType === 'entity'
+        ? `${indent}    from crewai.memory import EntityMemory\n${indent}    memory = EntityMemory()`
+        : `${indent}    memory = None`
+}
+${indent}    print(f"✓ CrewAI pre-compiled at load() — ${agentCount} agents, ${totalToolCount} tools, memory=${memoryType}")
+${indent}except Exception as e:
+${indent}    print(f"⚠ CrewAI pre-compile failed: {e}")
+${indent}    raise`;
+      }
+
       case 'transformers':
       case 'pytorch':
         return `${indent}from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -499,7 +562,7 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
 
       default:
         throw new Error(
-          `Unsupported framework: ${framework}. Supported: langchain, langgraph, transformers, pytorch, jax, tensorflow`,
+          `Unsupported framework: ${framework}. Supported: langchain, langgraph, crewai, transformers, pytorch, jax, tensorflow`,
         );
     }
   }

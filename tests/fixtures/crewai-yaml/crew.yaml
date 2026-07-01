@@ -1,0 +1,13 @@
+agents:
+  - role: "Researcher"
+    goal: "Find accurate sources"
+    backstory: "Expert at web research"
+    tool_count: 2
+  - role: "Writer"
+    goal: "Write clear summaries"
+    backstory: "Technical writer"
+    tool_count: 1
+  - role: "Editor"
+    goal: "Edit for clarity"
+    backstory: "Senior editor"
+    tool_count: 1
