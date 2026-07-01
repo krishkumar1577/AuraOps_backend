@@ -13,9 +13,29 @@ jest.mock('../../utils/logger', () => ({
   },
 }));
 
+jest.mock('../../utils/config', () => ({
+  config: {
+    modal_token_id: '',
+    modal_token_secret: '',
+    aws_region: 'us-east-1',
+    aws_access_key_id: '',
+    aws_secret_access_key: '',
+    s3_bucket: 'aura-weights',
+  },
+}));
+
+jest.mock('../../services/orchestration/modalAppDeployer', () => ({
+  ModalAppDeployer: {
+    generateModalApp: jest.fn().mockReturnValue('import modal'),
+    writeModalApp: jest.fn().mockResolvedValue('/tmp/auraops-dep/modal_app_test.py'),
+    deployApp: jest.fn().mockResolvedValue('https://workspace--auraops-local.modal.run'),
+  },
+}));
+
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 import { deployCommand } from '../deploy';
+import { ModalAppDeployer } from '../../services/orchestration/modalAppDeployer';
 
 describe('CLI: auraops deploy', () => {
   let tmpDir: string;
@@ -61,15 +81,48 @@ describe('CLI: auraops deploy', () => {
     stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
     exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => {}) as never);
     deployCommand.setOptionValueWithSource('gpus', undefined, 'default');
+    deployCommand.setOptionValueWithSource('server', false, 'default');
+    deployCommand.setOptionValueWithSource('mcp', false, 'default');
+    process.env.MODAL_TOKEN_ID = 'test-token-id';
+    process.env.MODAL_TOKEN_SECRET = 'test-token-secret';
     jest.clearAllMocks();
   });
 
   afterEach(async () => {
     jest.restoreAllMocks();
+    delete process.env.MODAL_TOKEN_ID;
+    delete process.env.MODAL_TOKEN_SECRET;
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('should deploy with explicit blueprint path', async () => {
+  it('should deploy locally by default using ModalAppDeployer', async () => {
+    const blueprintPath = path.join(tmpDir, 'blueprint.json');
+    await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
+
+    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath]);
+
+    expect(ModalAppDeployer.generateModalApp).toHaveBeenCalled();
+    expect(ModalAppDeployer.writeModalApp).toHaveBeenCalled();
+    expect(ModalAppDeployer.deployApp).toHaveBeenCalled();
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('local (Modal CLI)'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('https://workspace--auraops-local.modal.run'));
+  });
+
+  it('should fail local deploy without Modal credentials', async () => {
+    delete process.env.MODAL_TOKEN_ID;
+    delete process.env.MODAL_TOKEN_SECRET;
+
+    const blueprintPath = path.join(tmpDir, 'blueprint.json');
+    await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
+
+    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath]);
+
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('MODAL_TOKEN_ID'));
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('should deploy with explicit blueprint path via hosted server', async () => {
     const blueprintPath = path.join(tmpDir, 'blueprint.json');
     await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
 
@@ -86,7 +139,7 @@ describe('CLI: auraops deploy', () => {
       },
     });
 
-    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath]);
+    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath, '--server']);
 
     expect(mockedAxios.post).toHaveBeenCalledWith(
       expect.stringContaining('/api/v1/deploy'),
@@ -116,7 +169,7 @@ describe('CLI: auraops deploy', () => {
       },
     });
 
-    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath]);
+    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath, '--server']);
 
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('dep-002'));
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('agent-002'));
@@ -142,7 +195,7 @@ describe('CLI: auraops deploy', () => {
     mockedAxios.post.mockRejectedValueOnce(axiosError);
     mockedAxios.isAxiosError.mockReturnValue(true);
 
-    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath]);
+    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath, '--server']);
 
     expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('Cannot connect'));
     expect(exitSpy).toHaveBeenCalledWith(1);
@@ -164,13 +217,13 @@ describe('CLI: auraops deploy', () => {
     mockedAxios.post.mockRejectedValueOnce(axiosError);
     mockedAxios.isAxiosError.mockReturnValue(true);
 
-    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath]);
+    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath, '--server']);
 
     expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('No available workers'));
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  it('should send gpuCount when --gpus is specified', async () => {
+  it('should send gpuCount when --gpus is specified (hosted)', async () => {
     const blueprintPath = path.join(tmpDir, 'blueprint.json');
     await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
 
@@ -185,7 +238,7 @@ describe('CLI: auraops deploy', () => {
       },
     });
 
-    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath, '--gpus', '4']);
+    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath, '--server', '--gpus', '4']);
 
     const lastCall = mockedAxios.post.mock.lastCall;
     expect(lastCall).toBeDefined();
@@ -194,27 +247,17 @@ describe('CLI: auraops deploy', () => {
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('GPUs'));
   });
 
-  it('should default gpuCount to 1', async () => {
+  it('should pass gpuCount to local Modal deploy', async () => {
     const blueprintPath = path.join(tmpDir, 'blueprint.json');
     await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
 
-    mockedAxios.post.mockResolvedValueOnce({
-      data: {
-        deploymentId: 'dep-single',
-        agentId: 'agent-single',
-        status: 'running',
-        estimatedTime: 25000,
-        endpoint_url: 'https://workspace--auraops-dep-single.modal.run',
-        endpoint_status: 'live',
-      },
-    });
+    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath, '--gpus', '2']);
 
-    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath]);
-
-    const lastCall = mockedAxios.post.mock.lastCall;
-    expect(lastCall).toBeDefined();
-    const payload = lastCall![1] as Record<string, unknown>;
-    expect(payload.gpuCount).toBe(1);
+    expect(ModalAppDeployer.generateModalApp).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(String),
+      expect.objectContaining({ gpuCount: 2 }),
+    );
   });
 
   it('should reject invalid --gpus value', async () => {
@@ -227,7 +270,7 @@ describe('CLI: auraops deploy', () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  it('should send correct GPU requirements', async () => {
+  it('should send correct GPU requirements (hosted)', async () => {
     const blueprintPath = path.join(tmpDir, 'blueprint.json');
     await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
 
@@ -242,7 +285,7 @@ describe('CLI: auraops deploy', () => {
       },
     });
 
-    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath]);
+    await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath, '--server']);
 
     const lastCall = mockedAxios.post.mock.lastCall;
     expect(lastCall).toBeDefined();
@@ -253,7 +296,7 @@ describe('CLI: auraops deploy', () => {
     expect(gpuReqs.pythonVersion).toBe('3.11');
   });
 
-  it('should poll for endpoint url when not returned immediately', async () => {
+  it('should poll for endpoint url when not returned immediately (hosted)', async () => {
     const blueprintPath = path.join(tmpDir, 'blueprint.json');
     await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
 
@@ -280,7 +323,7 @@ describe('CLI: auraops deploy', () => {
       }) as typeof setTimeout);
 
     try {
-      await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath]);
+      await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath, '--server']);
     } finally {
       setTimeoutSpy.mockRestore();
     }
@@ -293,36 +336,16 @@ describe('CLI: auraops deploy', () => {
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Endpoint'));
   });
 
-  it('should print Claude Desktop MCP config when --mcp is set', async () => {
+  it('should print Claude Desktop MCP config when --mcp is set (local)', async () => {
     const blueprintPath = path.join(tmpDir, 'blueprint.json');
     await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
 
-    const claudeConfig = JSON.stringify({
-      mcpServers: {
-        'auraops-test': {
-          url: 'https://workspace--auraops-dep.modal.run/mcp/tools',
-        },
-      },
-    }, null, 2);
-
-    mockedAxios.post.mockResolvedValueOnce({
-      data: {
-        success: true,
-        deploymentId: '550e8400-e29b-41d4-a716-446655440000',
-        agentId: 'agent-mcp',
-        status: 'running',
-        endpoint_url: 'https://workspace--auraops-dep.modal.run',
-        mcp_enabled: true,
-        claude_desktop_config_json: claudeConfig,
-      },
-    });
-
     await deployCommand.parseAsync(['node', 'auraops', '-b', blueprintPath, '--mcp']);
 
-    expect(mockedAxios.post).toHaveBeenCalledWith(
+    expect(ModalAppDeployer.generateModalApp).toHaveBeenCalledWith(
+      expect.any(Object),
       expect.any(String),
       expect.objectContaining({ enableMcp: true }),
-      expect.any(Object),
     );
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('MCP server ready'));
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('/mcp/tools'));

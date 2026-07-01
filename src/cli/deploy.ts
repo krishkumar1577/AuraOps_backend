@@ -5,6 +5,7 @@ import axios from 'axios';
 import type { BlueprintJSON } from '../types/blueprint.types';
 import * as ui from './utils';
 import { runFleetDeploy } from './fleet';
+import { runLocalDeploy } from './localDeploy';
 
 interface DeployOptions {
   blueprint?: string;
@@ -14,6 +15,7 @@ interface DeployOptions {
   token?: string;
   fleet?: string;
   mcp?: boolean;
+  server?: boolean;
 }
 
 function parseGpuCount(value: string | undefined): number {
@@ -52,22 +54,114 @@ function resolveProjectRoot(blueprintPath: string): string {
     : blueprintDir;
 }
 
-async function runDeploy(options: DeployOptions, gpusSource?: OptionValueSource): Promise<void> {
-  const start = Date.now();
-
-  ui.header('AuraOps Deploy');
-
-  const blueprintPath = options.blueprint
-    ? path.resolve(options.blueprint)
-    : path.join(process.cwd(), '.auraops', 'blueprint.json');
-
-  ui.info(`Loading blueprint: ${blueprintPath}`);
+function printDeploySummary(options: {
+  deploymentId: string;
+  agentId?: string;
+  status: string;
+  blueprint: BlueprintJSON;
+  gpuCount: number;
+  totalTimeMs: number;
+  endpointUrl?: string;
+  mcp?: boolean;
+  mcpEnabled?: boolean;
+  claudeDesktopConfigJson?: string;
+  apiUrl?: string;
+  mode: 'local' | 'server';
+}): void {
+  ui.blank();
+  ui.label('Deployment ID', options.deploymentId);
+  if (options.agentId) {
+    ui.label('Agent ID', options.agentId);
+  }
+  ui.label('Status', options.status);
+  ui.label('Mode', options.mode === 'local' ? 'local (Modal CLI)' : 'hosted server');
+  ui.label('Framework', `${options.blueprint.framework.framework} ${options.blueprint.framework.version}`);
+  ui.label('GPU Memory', `${options.blueprint.deploymentConfig.gpuMemoryGB}GB`);
+  ui.label('GPUs', String(options.gpuCount));
+  ui.label('Deploy Time', ui.formatMs(options.totalTimeMs));
   ui.blank();
 
-  const validateStart = Date.now();
-  const blueprint = await loadBlueprint(blueprintPath);
-  ui.step('Blueprint validated', ui.formatMs(Date.now() - validateStart));
+  if (options.endpointUrl) {
+    ui.success('Live endpoint ready:');
+    ui.label('Endpoint', options.endpointUrl);
+    ui.blank();
+    ui.info('Test it:');
+    ui.info(`curl -X POST ${options.endpointUrl} \\`);
+    ui.info('  -H "Content-Type: application/json" \\');
+    ui.info(`  -d '{"input": "hello"}'`);
 
+    if (options.mcp && options.mcpEnabled) {
+      ui.blank();
+      ui.success('MCP server ready — add to Claude Desktop:');
+      ui.info('~/Library/Application Support/Claude/claude_desktop_config.json');
+      ui.blank();
+      if (options.claudeDesktopConfigJson) {
+        process.stdout.write(options.claudeDesktopConfigJson + '\n');
+      }
+      if (options.mode === 'server' && options.apiUrl) {
+        ui.blank();
+        ui.info(`MCP card: GET ${options.apiUrl}/api/v1/deployment/${options.deploymentId}/mcp/card`);
+        ui.info(`Discovery: GET ${options.apiUrl}/.well-known/mcp/${options.deploymentId}.json`);
+      }
+    }
+  } else {
+    ui.warn('No live endpoint returned — check Modal credentials');
+  }
+
+  ui.success(`Deployed in ${ui.formatMs(options.totalTimeMs)}`);
+  if (options.mode === 'server') {
+    ui.info(`Check status: auraops status ${options.deploymentId}`);
+  } else {
+    ui.info(`Deployment saved to .auraops/last-deployment.json`);
+  }
+}
+
+async function runLocalDeployFlow(
+  options: DeployOptions,
+  blueprint: BlueprintJSON,
+  blueprintPath: string,
+  gpuCount: number,
+  start: number,
+): Promise<void> {
+  if (options.provider && !['auto', 'modal'].includes(options.provider)) {
+    ui.warn(
+      `Provider "${options.provider}" is only supported with --server. Using local Modal deploy.`,
+    );
+  }
+
+  const genStart = Date.now();
+  const result = await runLocalDeploy({
+    blueprint,
+    blueprintPath,
+    gpuCount,
+    enableMcp: options.mcp ?? false,
+  });
+  ui.step('Modal app deployed locally', ui.formatMs(Date.now() - genStart));
+
+  const totalTime = Date.now() - start;
+  ui.step('Agent live', ui.formatMs(totalTime));
+
+  printDeploySummary({
+    deploymentId: result.deploymentId,
+    status: 'running',
+    blueprint,
+    gpuCount,
+    totalTimeMs: totalTime,
+    endpointUrl: result.endpointUrl,
+    mcp: options.mcp,
+    mcpEnabled: result.mcpEnabled,
+    claudeDesktopConfigJson: result.claudeDesktopConfigJson,
+    mode: 'local',
+  });
+}
+
+async function runServerDeploy(
+  options: DeployOptions,
+  blueprint: BlueprintJSON,
+  blueprintPath: string,
+  gpuCount: number,
+  start: number,
+): Promise<void> {
   const projectPath = resolveProjectRoot(blueprintPath);
   const requirementsLock = path.join(projectPath, 'requirements.lock');
   const requirementsTxt = path.join(projectPath, 'requirements.txt');
@@ -79,10 +173,9 @@ async function runDeploy(options: DeployOptions, gpusSource?: OptionValueSource)
 
   const apiUrl = ui.resolveApiUrl();
   const headers = ui.getAuthHeaders(options.token);
-  const gpuCount = gpusSource === 'cli' ? parseGpuCount(options.gpus) : 1;
 
   const syncStart = Date.now();
-  ui.info('Syncing agent logic...');
+  ui.info('Syncing agent logic to AuraOps server...');
 
   const deployPayload = {
     blueprintId: blueprint.id,
@@ -126,7 +219,7 @@ async function runDeploy(options: DeployOptions, gpusSource?: OptionValueSource)
     }
     if (axios.isAxiosError(error) && error.code === 'ECONNREFUSED') {
       throw new Error(
-        `Cannot connect to AuraOps server at ${apiUrl}. Is the server running? Start it with: npm run dev`,
+        `Cannot connect to AuraOps server at ${apiUrl}. Use local deploy (default) or start the server with: npm run dev`,
       );
     }
     throw error;
@@ -155,7 +248,7 @@ async function runDeploy(options: DeployOptions, gpusSource?: OptionValueSource)
       }
 
       if (statusData.endpoint_status === 'failed') {
-        ui.warn(`Modal endpoint failed: ${statusData.modal_deployment_error}`);
+        ui.warn(`Endpoint failed: ${statusData.modal_deployment_error}`);
         break;
       }
     }
@@ -163,60 +256,59 @@ async function runDeploy(options: DeployOptions, gpusSource?: OptionValueSource)
 
   ui.step('Logic synced', ui.formatMs(Date.now() - syncStart));
 
-  const attachStart = Date.now();
-  ui.step('Model layers attached', ui.formatMs(Date.now() - attachStart));
-
-  const hwStart = Date.now();
-  ui.step('Hardware synchronized', ui.formatMs(Date.now() - hwStart));
-
   const totalTime = Date.now() - start;
-  ui.step(`Agent live`, ui.formatMs(totalTime));
+  ui.step('Agent live', ui.formatMs(totalTime));
 
-  ui.blank();
-  ui.label('Deployment ID', deployResult.deploymentId);
-  ui.label('Agent ID', deployResult.agentId);
-  ui.label('Status', deployResult.status);
-  ui.label('Framework', `${blueprint.framework.framework} ${blueprint.framework.version}`);
-  ui.label('GPU Memory', `${blueprint.deploymentConfig.gpuMemoryGB}GB`);
-  ui.label('GPUs', String(gpuCount));
-  ui.label('Deploy Time', ui.formatMs(totalTime));
-  ui.blank();
-  if (deployResult.endpoint_url) {
-    ui.blank();
-    ui.success('Live endpoint ready:');
-    ui.label('Endpoint', deployResult.endpoint_url);
-    ui.blank();
-    ui.info('Test it:');
-    ui.info(`curl -X POST ${deployResult.endpoint_url} \\`);
-    ui.info('  -H "Content-Type: application/json" \\');
-    ui.info(`  -d '{"input": "hello"}'`);
+  printDeploySummary({
+    deploymentId: deployResult.deploymentId,
+    agentId: deployResult.agentId,
+    status: deployResult.status,
+    blueprint,
+    gpuCount,
+    totalTimeMs: totalTime,
+    endpointUrl: deployResult.endpoint_url,
+    mcp: options.mcp,
+    mcpEnabled: deployResult.mcp_enabled,
+    claudeDesktopConfigJson: deployResult.claude_desktop_config_json,
+    apiUrl,
+    mode: 'server',
+  });
+}
 
-    if (options.mcp && deployResult.mcp_enabled) {
-      ui.blank();
-      ui.success('MCP server ready — add to Claude Desktop:');
-      ui.info('~/Library/Application Support/Claude/claude_desktop_config.json');
-      ui.blank();
-      if (deployResult.claude_desktop_config_json) {
-        process.stdout.write(deployResult.claude_desktop_config_json + '\n');
-      }
-      ui.blank();
-      ui.info(`MCP card: GET ${apiUrl}/api/v1/deployment/${deployResult.deploymentId}/mcp/card`);
-      ui.info(`Discovery: GET ${apiUrl}/.well-known/mcp/${deployResult.deploymentId}.json`);
-    }
-  } else {
-    ui.warn('No live endpoint returned — check Modal credentials');
+async function runDeploy(options: DeployOptions, gpusSource?: OptionValueSource): Promise<void> {
+  const start = Date.now();
+
+  ui.header('AuraOps Deploy');
+
+  const blueprintPath = options.blueprint
+    ? path.resolve(options.blueprint)
+    : path.join(process.cwd(), '.auraops', 'blueprint.json');
+
+  ui.info(`Loading blueprint: ${blueprintPath}`);
+  ui.blank();
+
+  const validateStart = Date.now();
+  const blueprint = await loadBlueprint(blueprintPath);
+  ui.step('Blueprint validated', ui.formatMs(Date.now() - validateStart));
+
+  const gpuCount = gpusSource === 'cli' ? parseGpuCount(options.gpus) : 1;
+
+  if (options.server) {
+    await runServerDeploy(options, blueprint, blueprintPath, gpuCount, start);
+    return;
   }
-  ui.success(`Deployed in ${ui.formatMs(totalTime)}`);
-  ui.info(`Check status: auraops status ${deployResult.deploymentId}`);
+
+  await runLocalDeployFlow(options, blueprint, blueprintPath, gpuCount, start);
 }
 
 export const deployCommand = new Command('deploy')
-  .description('Deploy AI agent to GPU')
+  .description('Deploy AI agent to GPU (local Modal CLI by default)')
   .option('-b, --blueprint <path>', 'Path to blueprint.json (default: .auraops/blueprint.json)')
-  .option('-p, --provider <name>', 'GPU provider (auto, modal, azure, aws)', 'auto')
+  .option('-p, --provider <name>', 'GPU provider for hosted deploy (auto, modal, azure, aws)', 'auto')
   .option('-g, --gpu <type>', 'GPU type (e.g. a100, h100, rtx4090)')
   .option('--gpus <count>', 'Number of GPUs to allocate (1-8)')
-  .option('--token <jwt>', 'API authentication token (or set AURAOPS_API_TOKEN)')
+  .option('--token <jwt>', 'API authentication token for hosted deploy (or set AURAOPS_API_TOKEN)')
+  .option('--server', 'Deploy via hosted AuraOps backend instead of local Modal CLI')
   .option('--fleet <path>', 'Deploy a multi-agent crew from crew.yaml')
   .option('--mcp', 'Auto-generate MCP server endpoint on deploy')
   .action(async (options: DeployOptions, command: Command) => {
