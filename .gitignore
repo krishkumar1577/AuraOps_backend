@@ -53,6 +53,18 @@ weights-cache/
 .claude/
 CLAUDE.md
 
+# Codex / AI assistant state
+.codex/
+.agents/
+.agent-memory/
+agent-memory/
+
+# Codex skills/plugins caches
+.plugins-cache/
+
+# Local sandbox/automation state
+.sandbox/
+
 # Infrastructure (committed — DO NOT ignore)
 # (was previously `infra/` here; removed because infra/ is actively tracked)
 

@@ -5,6 +5,12 @@ node_modules
 coverage
 tests
 .claude
+.codex
+.agents
+.agent-memory
+agent-memory
+.plugins-cache
+.sandbox
 CLAUDE.md
 nixpacks.toml
 dump.rdb
