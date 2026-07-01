@@ -92,7 +92,10 @@ AuraOps is built for multi-tenant, zero-trust environments:
 ## Quick Start
 
 ```bash
-# Install
+# Run without a global install
+npx auraops -h
+
+# Or install globally if you want plain `auraops ...`
 npm install -g auraops
 
 # Register and get your API token
@@ -101,16 +104,21 @@ npm install -g auraops
 export AURAOPS_API_TOKEN=your_token
 
 # Deploy any Python file — no requirements.txt needed
-auraops deploy my_agent.py
+npx auraops deploy my_agent.py
 
 # Or initialize an existing project
-auraops init ./my-ml-project
-auraops deploy
+npx auraops init ./my-ml-project
+npx auraops deploy
 ```
+
+If you installed AuraOps with `npm install auraops`, use `npx auraops ...` or `./node_modules/.bin/auraops ...`.
+If you installed it with `npm install -g auraops`, you can use `auraops ...` directly.
 
 ---
 
 ## CLI Commands
+
+Examples below use `auraops ...` for readability. If you installed locally with `npm install auraops`, run the same commands as `npx auraops ...`.
 
 | Command | What it does |
 |---------|-------------|
@@ -268,8 +276,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-      - run: npm install -g auraops
-      - run: auraops deploy ./main.py
+      - run: npx auraops deploy ./main.py
         env:
           AURAOPS_API_TOKEN: ${{ secrets.AURAOPS_API_TOKEN }}
 ```
