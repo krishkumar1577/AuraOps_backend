@@ -77,7 +77,7 @@ export function getAuthHeaders(token?: string): Record<string, string> {
   return { Authorization: `Bearer ${resolved}` };
 }
 
-const DEFAULT_API_URL = 'https://auraops-backend-production.up.railway.app';
+const DEFAULT_API_URL = 'https://auraopsbackend-production.up.railway.app';
 
 export function resolveApiUrl(): string {
   return process.env.AURAOPS_API_URL || DEFAULT_API_URL;
