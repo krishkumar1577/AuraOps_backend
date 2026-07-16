@@ -589,6 +589,114 @@ describe('Orchestrator', () => {
       const status = await orchestrator.getDeploymentStatus(deployment.agentId);
       expect(status.gpuUtilization).toBeNull();
     });
+
+    it('should not refresh lastActivityAt on status poll', async () => {
+      const requirements: WorkerRequirements = {
+        minGPUMemory: 4,
+        framework: 'pytorch',
+        pythonVersion: '3.10',
+      };
+      const worker = await orchestrator.acquireWorker(requirements);
+      const blueprint = createBlueprintFixture();
+
+      const deployment = await orchestrator.deployAgent(
+        worker.workerId,
+        blueprint,
+        '/path/to/lockfile',
+        'env-hash-123',
+      );
+
+      const deploymentKey = `orchestration:deployment:${deployment.agentId}`;
+      const stored = JSON.parse(redisClient.store.get(deploymentKey)!);
+      const frozenActivity = Date.now() - 60_000;
+      stored.lastActivityAt = frozenActivity;
+      redisClient.store.set(deploymentKey, JSON.stringify(stored));
+
+      const status = await orchestrator.getDeploymentStatus(deployment.agentId);
+      expect(status.lastActivityAt).toBe(frozenActivity);
+
+      const after = JSON.parse(redisClient.store.get(deploymentKey)!);
+      expect(after.lastActivityAt).toBe(frozenActivity);
+    });
+
+    it('should update lastActivityAt via touchDeploymentActivity', async () => {
+      const requirements: WorkerRequirements = {
+        minGPUMemory: 4,
+        framework: 'pytorch',
+        pythonVersion: '3.10',
+      };
+      const worker = await orchestrator.acquireWorker(requirements);
+      const blueprint = createBlueprintFixture();
+
+      const deployment = await orchestrator.deployAgent(
+        worker.workerId,
+        blueprint,
+        '/path/to/lockfile',
+        'env-hash-123',
+      );
+
+      const deploymentKey = `orchestration:deployment:${deployment.agentId}`;
+      const stored = JSON.parse(redisClient.store.get(deploymentKey)!);
+      const frozenActivity = Date.now() - 120_000;
+      stored.lastActivityAt = frozenActivity;
+      redisClient.store.set(deploymentKey, JSON.stringify(stored));
+
+      await orchestrator.touchDeploymentActivity(deployment.agentId);
+
+      const after = JSON.parse(redisClient.store.get(deploymentKey)!);
+      expect(after.lastActivityAt).toBeGreaterThan(frozenActivity);
+    });
+  });
+
+  describe('cleanupIdleDeployments', () => {
+    it('should terminate deployments idle beyond threshold without status polls resetting activity', async () => {
+      const requirements: WorkerRequirements = {
+        minGPUMemory: 4,
+        framework: 'pytorch',
+        pythonVersion: '3.10',
+      };
+      const worker = await orchestrator.acquireWorker(requirements);
+      const blueprint = createBlueprintFixture();
+
+      const deployment = await orchestrator.deployAgent(
+        worker.workerId,
+        blueprint,
+        '/path/to/lockfile',
+        'env-hash-123',
+      );
+
+      const deploymentKey = `orchestration:deployment:${deployment.agentId}`;
+      const stored = JSON.parse(redisClient.store.get(deploymentKey)!);
+      stored.lastActivityAt = Date.now() - 15 * 60_000;
+      redisClient.store.set(deploymentKey, JSON.stringify(stored));
+
+      const terminated = await orchestrator.cleanupIdleDeployments(10 * 60_000);
+      expect(terminated).toBe(1);
+      expect(redisClient.store.has(deploymentKey)).toBe(false);
+    });
+
+    it('should not terminate active deployments within threshold', async () => {
+      const requirements: WorkerRequirements = {
+        minGPUMemory: 4,
+        framework: 'pytorch',
+        pythonVersion: '3.10',
+      };
+      const worker = await orchestrator.acquireWorker(requirements);
+      const blueprint = createBlueprintFixture();
+
+      const deployment = await orchestrator.deployAgent(
+        worker.workerId,
+        blueprint,
+        '/path/to/lockfile',
+        'env-hash-123',
+      );
+
+      const terminated = await orchestrator.cleanupIdleDeployments(10 * 60_000);
+      expect(terminated).toBe(0);
+
+      const status = await orchestrator.getDeploymentStatus(deployment.agentId);
+      expect(status.agentId).toBe(deployment.agentId);
+    });
   });
 
   describe('listDeployments', () => {

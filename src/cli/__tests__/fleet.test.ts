@@ -58,11 +58,15 @@ describe('CLI: auraops fleet', () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auraops-fleet-'));
     stdoutSpy = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
     exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+    process.env.AURAOPS_API_TOKEN = 'test-api-jwt';
+    process.env.AURAOPS_NONINTERACTIVE = '1';
     jest.clearAllMocks();
   });
 
   afterEach(async () => {
     jest.restoreAllMocks();
+    delete process.env.AURAOPS_API_TOKEN;
+    delete process.env.AURAOPS_NONINTERACTIVE;
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 

@@ -280,10 +280,14 @@ export class S3WeightManager {
   }
 
   /**
-   * Helper: delay execution for exponential backoff
+   * Helper: delay execution for exponential backoff.
+   * unref so the timer does not keep the process alive on its own.
    */
   private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    return new Promise((resolve) => {
+      const t = setTimeout(resolve, ms);
+      t.unref?.();
+    });
   }
 
   /**

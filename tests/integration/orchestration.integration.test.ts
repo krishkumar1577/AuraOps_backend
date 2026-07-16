@@ -125,6 +125,22 @@ jest.mock('../../src/utils/errors', () => {
 const mockFetch = jest.fn();
 global.fetch = mockFetch as any;
 
+/** Fetch mock that hangs until AbortSignal aborts — keeps timeout tests fast. */
+function hangUntilAbort(signal?: AbortSignal | null): Promise<Response> {
+  return new Promise((_resolve, reject) => {
+    const abort = () => {
+      const err = new Error('The operation was aborted');
+      err.name = 'AbortError';
+      reject(err);
+    };
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
 /**
  * Mock GPU Provider for testing
  */
@@ -777,18 +793,20 @@ describe('Phase 4: GPU Deployment Orchestration Integration', () => {
 
       const worker = await orchestrator.acquireWorker(requirements);
 
-      // Mock timeout scenario
-      mockFetch.mockImplementation(() => new Promise(resolve => setTimeout(resolve, 10000)));
+      // Hang until AbortSignal fires (respects healthCheck AbortController — no real 10s sleep)
+      mockFetch.mockImplementation((_url: string, init?: RequestInit) =>
+        hangUntilAbort(init?.signal),
+      );
 
       const health = healthCheck.checkAgent(worker.workerId, {
         host: worker.ipAddress,
         port: worker.port,
-        timeout: 100,
+        timeout: 50,
       });
 
-      // Should timeout
+      // Should timeout via AbortError path
       await expect(health).rejects.toThrow();
-    }, 45000); // Increase timeout to 45s for this test
+    }, 5000);
 
     it('should recover from failed deployment', async () => {
       const requirements: WorkerRequirements = {
@@ -946,21 +964,18 @@ describe('Phase 4: GPU Deployment Orchestration Integration', () => {
     });
 
     it('should handle health check timeout', async () => {
-      mockFetch.mockImplementation(
-        () => new Promise(resolve => setTimeout(() => resolve({
-          ok: false,
-          json: async () => ({}),
-        }), 10000)),
+      mockFetch.mockImplementation((_url: string, init?: RequestInit) =>
+        hangUntilAbort(init?.signal),
       );
 
       await expect(
         healthCheck.checkAgent('agent-004', {
           host: '10.0.0.4',
           port: 8000,
-          timeout: 100,
+          timeout: 50,
         }),
       ).rejects.toThrow();
-    }, 45000); // Increase timeout to 45s for this test
+    }, 5000);
 
     it('should wait until agent is ready', async () => {
       // Simulate polling until ready

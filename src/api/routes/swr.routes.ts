@@ -63,7 +63,7 @@ interface StatsResponse {
 interface ErrorResponse {
   success: boolean;
   error: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
 }
 
 /**

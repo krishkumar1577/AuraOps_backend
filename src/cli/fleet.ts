@@ -4,6 +4,7 @@ import * as path from 'path';
 import axios from 'axios';
 import type { BlueprintJSON } from '../types/blueprint.types';
 import { CrewParser } from '../services/fleet/crewParser';
+import { resolveProjectRoot } from '../services/orchestration/userProjectDeploy';
 import * as ui from './utils';
 
 export interface FleetDeployOptions {
@@ -40,13 +41,6 @@ function resolveBlueprintPath(
   return path.join(crewDir, '.auraops', 'blueprint.json');
 }
 
-function resolveProjectRoot(blueprintPath: string): string {
-  const blueprintDir = path.dirname(blueprintPath);
-  return path.basename(blueprintDir) === '.auraops'
-    ? path.resolve(blueprintDir, '..')
-    : blueprintDir;
-}
-
 export async function runFleetDeploy(options: FleetDeployOptions): Promise<void> {
   const start = Date.now();
   const fleetPath = path.resolve(options.fleet);
@@ -62,7 +56,7 @@ export async function runFleetDeploy(options: FleetDeployOptions): Promise<void>
   ui.blank();
 
   const apiUrl = ui.resolveApiUrl();
-  const headers = ui.getAuthHeaders(options.token);
+  const headers = await ui.resolveAuthHeaders(options.token);
   const gpuCount = options.gpus ? Number.parseInt(options.gpus, 10) : 1;
 
   const deployments: Array<{ agent: string; deploymentId: string; endpoint?: string }> = [];

@@ -23,11 +23,15 @@ describe('CLI: auraops status', () => {
     stdoutSpy = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
     stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
     exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+    process.env.AURAOPS_API_TOKEN = 'test-api-jwt';
+    process.env.AURAOPS_NONINTERACTIVE = '1';
     jest.clearAllMocks();
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
+    delete process.env.AURAOPS_API_TOKEN;
+    delete process.env.AURAOPS_NONINTERACTIVE;
   });
 
   it('should display running deployment status', async () => {

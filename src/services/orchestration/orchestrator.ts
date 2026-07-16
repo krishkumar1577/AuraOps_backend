@@ -367,19 +367,43 @@ export class Orchestrator {
 
       const deployment = JSON.parse(payload) as StoredDeployment;
 
+      // Do not refresh lastActivityAt here — status polls must not reset idle timers
+      // (scale-to-zero reaper). Real traffic should call touchDeploymentActivity().
       if (deployment.status === 'running') {
         deployment.gpuUtilization = await this.fetchGpuUtilization(deployment.workerId);
+        await this.redisClient.set(deploymentKey, JSON.stringify(deployment), {
+          EX: 86400,
+        });
       }
-
-      // Update last activity on every status check (Simulating Scale-to-Zero activity)
-      deployment.lastActivityAt = Date.now();
-      await this.redisClient.set(deploymentKey, JSON.stringify(deployment), {
-        EX: 86400,
-      });
 
       return deployment;
     } catch (error: unknown) {
       throw this.toDeploymentError('Failed to get deployment status', { agentId }, error);
+    }
+  }
+
+  /**
+   * Mark a deployment as recently active (real request/traffic).
+   * Status polling must not call this — only live agent traffic.
+   */
+  async touchDeploymentActivity(agentId: string): Promise<void> {
+    try {
+      await this.ensureConnected();
+
+      const deploymentKey = this.deploymentKey(agentId);
+      const payload = await this.redisClient.get(deploymentKey);
+
+      if (!payload) {
+        throw new DeploymentError('Deployment not found', { agentId });
+      }
+
+      const deployment = JSON.parse(payload) as StoredDeployment;
+      deployment.lastActivityAt = Date.now();
+      await this.redisClient.set(deploymentKey, JSON.stringify(deployment), {
+        EX: 86400,
+      });
+    } catch (error: unknown) {
+      throw this.toDeploymentError('Failed to touch deployment activity', { agentId }, error);
     }
   }
 
@@ -462,7 +486,13 @@ export class Orchestrator {
   async deployPersistentModal(
     deploymentId: string,
     blueprint: BlueprintJSON,
-    deployConfig?: { skipPipInstall?: boolean; cachedImageRef?: string; gpuCount?: number; enableMcp?: boolean },
+    deployConfig?: {
+      skipPipInstall?: boolean;
+      cachedImageRef?: string;
+      gpuCount?: number;
+      enableMcp?: boolean;
+      projectPath?: string;
+    },
   ): Promise<{ endpointUrl: string; appName: string; imageRef: string; deploymentTime: number }> {
     const start = Date.now();
 
@@ -474,10 +504,10 @@ export class Orchestrator {
       );
 
       // Find Modal provider
-      let modalProvider: any | null = null;
+      let modalProvider: PersistentDeployProvider | null = null;
       for (const provider of this.providers) {
         if (provider.name === 'Modal' && 'deployPersistentApp' in provider) {
-          modalProvider = provider;
+          modalProvider = provider as GPUProvider & PersistentDeployProvider;
           break;
         }
       }
@@ -521,7 +551,13 @@ export class Orchestrator {
   async deployPersistentWithFallback(
     deploymentId: string,
     blueprint: BlueprintJSON,
-    deployConfig?: { skipPipInstall?: boolean; cachedImageRef?: string; gpuCount?: number; enableMcp?: boolean },
+    deployConfig?: {
+      skipPipInstall?: boolean;
+      cachedImageRef?: string;
+      gpuCount?: number;
+      enableMcp?: boolean;
+      projectPath?: string;
+    },
     preferredProvider?: string,
   ): Promise<{
     endpointUrl: string;
@@ -595,10 +631,11 @@ export class Orchestrator {
       await this.ensureConnected();
 
       // Find Modal provider
-      let modalProvider: any | null = null;
+      type StopPersistentProvider = { stopPersistentApp(deploymentId: string): Promise<void> };
+      let modalProvider: StopPersistentProvider | null = null;
       for (const provider of this.providers) {
         if (provider.name === 'Modal' && 'stopPersistentApp' in provider) {
-          modalProvider = provider;
+          modalProvider = provider as GPUProvider & StopPersistentProvider;
           break;
         }
       }
@@ -802,8 +839,9 @@ export class Orchestrator {
   }
 
   private async sleep(ms: number): Promise<void> {
-    return new Promise(resolve => {
-      setTimeout(resolve, ms);
+    return new Promise((resolve) => {
+      const t = setTimeout(resolve, ms);
+      t.unref?.();
     });
   }
 

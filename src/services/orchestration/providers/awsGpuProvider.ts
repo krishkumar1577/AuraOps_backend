@@ -4,6 +4,7 @@ import {
   TerminateInstancesCommand,
   DescribeInstancesCommand,
   Instance as EC2Instance,
+  type _InstanceType,
 } from '@aws-sdk/client-ec2';
 import { PricingClient, GetProductsCommand } from '@aws-sdk/client-pricing';
 import { DeploymentError } from '../../../utils/errors';
@@ -122,7 +123,7 @@ export class AWSGPUProvider extends BaseGPUProvider {
       const launchResponse = await this.ec2Client!.send(
         new RunInstancesCommand({
           ImageId: this.ami,
-          InstanceType: matching.instanceType as any, // AWS SDK type constraint workaround
+          InstanceType: matching.instanceType as _InstanceType,
           MinCount: 1,
           MaxCount: 1,
           SecurityGroupIds: [this.securityGroupId],
@@ -223,14 +224,16 @@ export class AWSGPUProvider extends BaseGPUProvider {
         return 0;
       }
 
-      const priceData = JSON.parse(pricingResponse.PriceList[0]);
-      const terms = Object.values(priceData.terms?.OnDemand || {})[0] as any;
+      const priceData = JSON.parse(pricingResponse.PriceList[0]) as {
+        terms?: { OnDemand?: Record<string, { priceDimensions?: Record<string, { pricePerUnit?: { USD?: string } }> }> };
+      };
+      const terms = Object.values(priceData.terms?.OnDemand || {})[0];
       if (!terms) {
         return 0;
       }
 
-      const priceDimensions = Object.values(terms.priceDimensions || {})[0] as any;
-      const price = parseFloat(priceDimensions?.pricePerUnit?.USD || 0);
+      const priceDimensions = Object.values(terms.priceDimensions || {})[0];
+      const price = parseFloat(priceDimensions?.pricePerUnit?.USD || '0');
 
       this.priceCache.set(gpuType, price);
       return price;
@@ -302,6 +305,9 @@ export class AWSGPUProvider extends BaseGPUProvider {
   }
 
   private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    return new Promise((resolve) => {
+      const t = setTimeout(resolve, ms);
+      t.unref?.();
+    });
   }
 }

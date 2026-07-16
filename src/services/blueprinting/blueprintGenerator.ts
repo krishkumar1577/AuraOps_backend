@@ -44,8 +44,8 @@ export class BlueprintGenerator {
       (blueprint as BlueprintJSON & { _entryPointWarning?: string })._entryPointWarning = entryPoint.warning;
     }
 
-    const copy: any = JSON.parse(JSON.stringify(blueprint));
-    copy.checksums.blueprintHash = undefined;
+    const copy = JSON.parse(JSON.stringify(blueprint)) as BlueprintJSON;
+    delete (copy.checksums as { blueprintHash?: string }).blueprintHash;
     blueprint.checksums.blueprintHash = this.hashBlueprint(copy);
 
     logger.info(
@@ -99,7 +99,7 @@ export class BlueprintGenerator {
     return this.sha256(sorted);
   }
 
-  private hashBlueprint(blueprint: any): string {
+  private hashBlueprint(blueprint: unknown): string {
     return this.sha256(JSON.stringify(blueprint));
   }
 

@@ -18,7 +18,7 @@ interface StatusResult {
 
 async function runStatus(deploymentId: string, options: { token?: string }): Promise<void> {
   const apiUrl = ui.resolveApiUrl();
-  const headers = ui.getAuthHeaders(options.token);
+  const headers = await ui.resolveAuthHeaders(options.token);
 
   ui.header('AuraOps Status');
   ui.blank();

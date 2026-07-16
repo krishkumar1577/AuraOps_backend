@@ -4,6 +4,7 @@ import { ProviderRegistry } from './providerRegistry';
 import { ModalProvider } from './providers/modalProvider';
 import { AzureGPUProvider } from './providers/azureGpuProvider';
 import { AWSGPUProvider } from './providers/awsGpuProvider';
+import { LambdaLabsProvider } from './providers/lambdaLabsProvider';
 import { config } from '../../utils/config';
 import { logger } from '../../utils/logger';
 
@@ -106,8 +107,15 @@ class ModalGPUProviderAdapter implements GPUProvider {
   }
 
   async getPrice(gpuType: string): Promise<number> {
-    await this.ensureInit();
+    // Guide map + env overrides; no cloud API call required.
     return this.modal.getPrice(gpuType);
+  }
+
+  async listAvailable(): Promise<
+    Array<{ gpuType: string; memoryGB: number; available: boolean; pricePerHour?: number; id?: string }>
+  > {
+    await this.ensureInit();
+    return this.modal.listAvailable();
   }
 
   async deployPersistentApp(
@@ -206,6 +214,13 @@ class AzureGPUProviderAdapter implements GPUProvider {
     return this.azure.getPrice(gpuType);
   }
 
+  async listAvailable(): Promise<
+    Array<{ gpuType: string; memoryGB: number; available: boolean; pricePerHour?: number; id?: string; region?: string }>
+  > {
+    await this.ensureInit();
+    return this.azure.listAvailable();
+  }
+
   async deployPersistentApp(
     deploymentId: string,
     blueprint: unknown,
@@ -291,6 +306,98 @@ class AWSGPUProviderAdapter implements GPUProvider {
     await this.ensureInit();
     return this.aws.getPrice(gpuType);
   }
+
+  async listAvailable(): Promise<
+    Array<{ gpuType: string; memoryGB: number; available: boolean; pricePerHour?: number; id?: string; region?: string }>
+  > {
+    await this.ensureInit();
+    return this.aws.listAvailable();
+  }
+}
+
+class LambdaLabsGPUProviderAdapter implements GPUProvider {
+  name = 'LambdaLabs';
+  private lambda: LambdaLabsProvider;
+  private initialized = false;
+
+  constructor(lambda?: LambdaLabsProvider) {
+    this.lambda = lambda ?? new LambdaLabsProvider();
+  }
+
+  private async ensureInit(): Promise<void> {
+    if (this.initialized) return;
+    await this.lambda.connect({
+      api_key: config.lambda_labs_api_key,
+    });
+    this.initialized = true;
+  }
+
+  async acquireWorker(requirements: WorkerRequirements): Promise<WorkerInfo | null> {
+    try {
+      await this.ensureInit();
+      const worker = await this.lambda.acquireGPU({
+        minMemory: requirements.minGPUMemory,
+        framework: requirements.framework,
+        gpuCount: requirements.gpuCount,
+      });
+
+      return {
+        workerId: worker.workerId,
+        gpuId: worker.gpuId,
+        ipAddress: worker.ipAddress,
+        port: worker.port,
+        gpuMemoryGB: worker.memoryGB,
+        availableGPUMemory: worker.memoryGB,
+        provider: this.name,
+        secureRuntimeActive: worker.secureRuntimeActive,
+      };
+    } catch (error) {
+      logger.error(
+        `Lambda Labs worker acquisition failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  async releaseWorker(workerId: string): Promise<void> {
+    await this.ensureInit();
+    await this.lambda.releaseGPU(workerId);
+  }
+
+  async healthCheck(_workerId: string): Promise<boolean> {
+    try {
+      await this.ensureInit();
+      return await this.lambda.healthCheck();
+    } catch {
+      return false;
+    }
+  }
+
+  async getGpuUtilization(workerId: string): Promise<number | null> {
+    try {
+      await this.ensureInit();
+      return await this.lambda.getGpuUtilization(workerId);
+    } catch {
+      return null;
+    }
+  }
+
+  async getPrice(gpuType: string): Promise<number> {
+    await this.ensureInit();
+    return this.lambda.getPrice(gpuType);
+  }
+
+  /** Live region prices from Lambda Labs instance-types API. */
+  async listAvailable(): Promise<
+    Array<{ gpuType: string; memoryGB: number; available: boolean; pricePerHour?: number; id?: string; region?: string }>
+  > {
+    await this.ensureInit();
+    return this.lambda.listAvailable();
+  }
+
+  getLambda(): LambdaLabsProvider {
+    return this.lambda;
+  }
 }
 
 function hasAzureCredentials(): boolean {
@@ -304,6 +411,10 @@ function hasAzureCredentials(): boolean {
 
 function hasAwsCredentials(): boolean {
   return !!(config.aws_access_key_id && config.aws_secret_access_key);
+}
+
+function hasLambdaLabsCredentials(): boolean {
+  return !!config.lambda_labs_api_key;
 }
 
 export function createDefaultOrchestrator(redisUrl: string): Orchestrator {
@@ -330,10 +441,20 @@ export function createDefaultOrchestrator(redisUrl: string): Orchestrator {
     logger.info('GPU provider: AWS (credentials configured)');
   }
 
+  if (hasLambdaLabsCredentials()) {
+    providers.push(new LambdaLabsGPUProviderAdapter());
+    logger.info('GPU provider: Lambda Labs (API key configured)');
+  }
+
   const registry = new ProviderRegistry(providers);
   logger.info(`Provider registry: ${registry.list().map((p) => p.name).join(', ')}`);
 
   return new Orchestrator(providers, redisClient as unknown as RedisClient);
 }
 
-export { ProviderRegistry, AzureGPUProviderAdapter, AWSGPUProviderAdapter };
+export {
+  ProviderRegistry,
+  AzureGPUProviderAdapter,
+  AWSGPUProviderAdapter,
+  LambdaLabsGPUProviderAdapter,
+};

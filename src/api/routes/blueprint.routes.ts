@@ -62,22 +62,21 @@ export async function blueprintRoutes(fastify: FastifyInstance) {
           },
         });
       } catch (error) {
-        const err = error as any;
-        logger.error('Blueprint generation error:', err);
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        logger.error('Blueprint generation error:', error);
         return reply.code(400).send({
           success: false,
-          error: err?.message || 'Unknown error',
+          error: message,
         });
       }
     },
   );
 
-  fastify.get<{ Params: unknown }>(
+  fastify.get<{ Params: { blueprintId: string } }>(
     '/api/v1/blueprint/:blueprintId',
-    async (request: FastifyRequest, reply: FastifyReply) => {
+    async (request, reply: FastifyReply) => {
       try {
-        const params = request.params as any;
-        const { blueprintId } = params;
+        const { blueprintId } = request.params;
 
         logger.info(`Retrieving blueprint: ${blueprintId}`);
 
@@ -86,8 +85,7 @@ export async function blueprintRoutes(fastify: FastifyInstance) {
           blueprintId,
         });
       } catch (error) {
-        const err = error as any;
-        logger.error('Blueprint retrieval error:', err);
+        logger.error('Blueprint retrieval error:', error);
         return reply.code(500).send({
           error: 'Failed to retrieve blueprint',
         });

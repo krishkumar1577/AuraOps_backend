@@ -21,7 +21,12 @@ describe('S3WeightManager', () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    manager = new S3WeightManager({ bucket: 'test-bucket', region: 'us-east-1' });
+    // Zero retry delay keeps failure-path tests fast (default 1s/2s backoff is for production).
+    manager = new S3WeightManager({
+      bucket: 'test-bucket',
+      region: 'us-east-1',
+      retryDelayMs: 0,
+    });
     tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'test-'));
   });
 
@@ -284,14 +289,15 @@ describe('S3WeightManager', () => {
       expect(result.path).toBeDefined();
     });
 
-    it('should handle empty bucket option (use default)', () => {
+    it('should handle empty bucket option (use default)', async () => {
       const manager2 = new S3WeightManager({ region: 'us-west-2' });
       expect(manager2).toBeDefined();
+      await manager2.dispose();
     });
 
     it('should dispose S3 client properly', async () => {
       const manager2 = new S3WeightManager();
-      expect(async () => await manager2.dispose()).not.toThrow();
+      await expect(manager2.dispose()).resolves.toBeUndefined();
     });
 
     it('should handle very long model names', async () => {

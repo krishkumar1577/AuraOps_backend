@@ -20,6 +20,7 @@ export const terminateCommand = new Command('terminate')
         ui.info('This will stop the Modal app and free GPU resources.');
       }
 
+      const headers = await ui.resolveAuthHeaders();
       const start = Date.now();
       const response = await fetch(
         `${apiUrl}/api/v1/deployment/${deploymentId}/stop-modal`,
@@ -27,7 +28,7 @@ export const terminateCommand = new Command('terminate')
           method: 'DELETE',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${process.env.AURAOPS_TOKEN || ''}`,
+            ...headers,
           },
         },
       );

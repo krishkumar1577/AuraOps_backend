@@ -85,6 +85,8 @@ describe('CLI: auraops deploy', () => {
     deployCommand.setOptionValueWithSource('mcp', false, 'default');
     process.env.MODAL_TOKEN_ID = 'test-token-id';
     process.env.MODAL_TOKEN_SECRET = 'test-token-secret';
+    process.env.AURAOPS_API_TOKEN = 'test-api-jwt';
+    process.env.AURAOPS_NONINTERACTIVE = '1';
     jest.clearAllMocks();
   });
 
@@ -92,6 +94,8 @@ describe('CLI: auraops deploy', () => {
     jest.restoreAllMocks();
     delete process.env.MODAL_TOKEN_ID;
     delete process.env.MODAL_TOKEN_SECRET;
+    delete process.env.AURAOPS_API_TOKEN;
+    delete process.env.AURAOPS_NONINTERACTIVE;
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -109,9 +113,10 @@ describe('CLI: auraops deploy', () => {
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('https://workspace--auraops-local.modal.run'));
   });
 
-  it('should fail local deploy without Modal credentials', async () => {
+  it('should fail local deploy without Modal credentials when non-interactive', async () => {
     delete process.env.MODAL_TOKEN_ID;
     delete process.env.MODAL_TOKEN_SECRET;
+    process.env.AURAOPS_NONINTERACTIVE = '1';
 
     const blueprintPath = path.join(tmpDir, 'blueprint.json');
     await fs.writeFile(blueprintPath, JSON.stringify(sampleBlueprint));
@@ -120,6 +125,8 @@ describe('CLI: auraops deploy', () => {
 
     expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('MODAL_TOKEN_ID'));
     expect(exitSpy).toHaveBeenCalledWith(1);
+
+    delete process.env.AURAOPS_NONINTERACTIVE;
   });
 
   it('should deploy with explicit blueprint path via hosted server', async () => {

@@ -42,7 +42,7 @@ async function isDockerDaemonRunning(): Promise<boolean> {
     logger.info('✅ Docker daemon is running');
     return true;
   } catch (error) {
-    const errorMsg = (error as any)?.message || '';
+    const errorMsg = error instanceof Error ? error.message : '';
     
     if (errorMsg.includes('Cannot connect to Docker daemon')) {
       logger.warn('⚠️ Docker daemon NOT running');
@@ -74,7 +74,10 @@ async function tryAutoStartDocker(): Promise<boolean> {
       
       // Wait for Docker to start (max 30 seconds)
       for (let i = 0; i < 30; i++) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, 1000);
+          t.unref?.();
+        });
         const running = await isDockerDaemonRunning();
         if (running) {
           logger.info('✅ Docker started successfully on macOS');
@@ -105,7 +108,10 @@ async function tryAutoStartDocker(): Promise<boolean> {
       
       // Wait for Docker to start
       for (let i = 0; i < 30; i++) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, 1000);
+          t.unref?.();
+        });
         const running = await isDockerDaemonRunning();
         if (running) {
           logger.info('✅ Docker Desktop started successfully on Windows');
@@ -116,7 +122,7 @@ async function tryAutoStartDocker(): Promise<boolean> {
       return false;
     }
   } catch (error) {
-    logger.warn('⚠️ Auto-start failed:', (error as any)?.message);
+    logger.warn('⚠️ Auto-start failed:', error instanceof Error ? error.message : String(error));
     return false;
   }
   
@@ -132,7 +138,7 @@ async function validateDockerConnection(): Promise<boolean> {
     logger.info('✅ Docker connection validated');
     return true;
   } catch (error) {
-    logger.error('❌ Docker connection failed:', (error as any)?.message);
+    logger.error('❌ Docker connection failed:', error instanceof Error ? error.message : String(error));
     return false;
   }
 }

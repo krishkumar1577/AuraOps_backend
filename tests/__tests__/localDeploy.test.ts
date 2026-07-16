@@ -40,7 +40,6 @@ jest.mock('../../src/services/mcp/mcpCardGenerator', () => ({
 }));
 
 import { runLocalDeploy } from '../../src/cli/localDeploy';
-import { DeploymentError } from '../../src/utils/errors';
 
 const SAMPLE_BLUEPRINT = {
   id: '11111111-1111-1111-1111-111111111111',
@@ -110,7 +109,16 @@ describe('CLI: runLocalDeploy', () => {
     });
 
     expect(mockGenerateModalApp).toHaveBeenCalledTimes(1);
-    expect(mockWriteModalApp).toHaveBeenCalledWith('import modal\n# generated app', expect.any(String));
+    expect(mockGenerateModalApp).toHaveBeenCalledWith(
+      SAMPLE_BLUEPRINT,
+      expect.any(String),
+      expect.objectContaining({ projectPath: expect.any(String), gpuCount: 1 }),
+    );
+    expect(mockWriteModalApp).toHaveBeenCalledWith(
+      'import modal\n# generated app',
+      expect.any(String),
+      expect.any(String), // projectPath — packages user code next to modal_app
+    );
     expect(mockDeployApp).toHaveBeenCalledWith('/tmp/auraops-dep/modal_app_test.py', expect.any(String));
 
     expect(result.endpointUrl).toBe(FAKE_ENDPOINT);
@@ -128,20 +136,12 @@ describe('CLI: runLocalDeploy', () => {
     expect(record.mcpEnabled).toBe(false);
   });
 
-  it('throws DeploymentError naming both Modal env vars when no credentials are present', async () => {
+  it('throws when Modal credentials are missing in non-interactive mode', async () => {
     delete process.env.MODAL_TOKEN_ID;
     delete process.env.MODAL_TOKEN_SECRET;
+    process.env.AURAOPS_NONINTERACTIVE = '1';
 
-    // The mocked config has empty token strings, so the credential check
-    // fails before ModalAppDeployer is touched.
-    await expect(
-      runLocalDeploy({
-        blueprint: SAMPLE_BLUEPRINT as any,
-        blueprintPath,
-        gpuCount: 1,
-      }),
-    ).rejects.toBeInstanceOf(DeploymentError);
-
+    // Jest is non-TTY + NONINTERACTIVE → clear error (no hang on prompt).
     await expect(
       runLocalDeploy({
         blueprint: SAMPLE_BLUEPRINT as any,
@@ -156,11 +156,13 @@ describe('CLI: runLocalDeploy', () => {
         blueprintPath,
         gpuCount: 1,
       }),
-    ).rejects.toThrow(/MODAL_TOKEN_SECRET/);
+    ).rejects.toThrow(/MODAL_TOKEN_SECRET|interactive/);
 
     expect(mockGenerateModalApp).not.toHaveBeenCalled();
     expect(mockWriteModalApp).not.toHaveBeenCalled();
     expect(mockDeployApp).not.toHaveBeenCalled();
+
+    delete process.env.AURAOPS_NONINTERACTIVE;
   });
 
   it('emits a Claude Desktop MCP config when enableMcp is true', async () => {

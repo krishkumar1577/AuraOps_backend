@@ -1,5 +1,6 @@
 import { detectAndInitializeDocker, validateCustomDockerConnection } from '../utils/dockerDetection';
 import * as readline from 'readline';
+import * as ui from './utils';
 
 /**
  * Interactive user input
@@ -22,22 +23,26 @@ function askUser(question: string): Promise<string> {
  * Check and initialize local GPU setup
  */
 export async function checkLocalGpuSetup(): Promise<void> {
-  console.log('\n🔍 Checking LocalGPU setup...\n');
+  ui.header('Checking LocalGPU setup...');
+  ui.blank();
   
   const dockerStatus = await detectAndInitializeDocker();
   
   if (dockerStatus.canConnect) {
-    console.log('✅ Docker is ready!');
-    console.log('✅ You can use: auraops deploy --local\n');
+    ui.success('Docker is ready!');
+    ui.success('You can use: auraops deploy --local');
+    ui.blank();
     return;
   }
   
   // Docker not available - ask user what to do
-  console.log('❌ Docker is not available\n');
-  console.log('Options:');
-  console.log('1. Manually start Docker and try again');
-  console.log('2. Connect to remote Docker daemon (host:port)');
-  console.log('3. Skip local GPU testing\n');
+  ui.fail('Docker is not available');
+  ui.blank();
+  process.stdout.write('Options:\n');
+  process.stdout.write('1. Manually start Docker and try again\n');
+  process.stdout.write('2. Connect to remote Docker daemon (host:port)\n');
+  process.stdout.write('3. Skip local GPU testing\n');
+  ui.blank();
   
   const answer = await askUser('Choose option (1-3): ');
   
@@ -47,33 +52,40 @@ export async function checkLocalGpuSetup(): Promise<void> {
     const port = parseInt(portStr);
     
     if (isNaN(port)) {
-      console.log('❌ Invalid port number\n');
+      ui.fail('Invalid port number');
+      ui.blank();
       return;
     }
     
     const connected = await validateCustomDockerConnection(host, port);
     
     if (connected) {
-      console.log(`\n✅ Connected to Docker at ${host}:${port}`);
-      console.log('✅ You can use: auraops deploy --local\n');
+      ui.blank();
+      ui.success(`Connected to Docker at ${host}:${port}`);
+      ui.success('You can use: auraops deploy --local');
+      ui.blank();
     } else {
-      console.log('❌ Could not connect to Docker\n');
+      ui.fail('Could not connect to Docker');
+      ui.blank();
     }
   } else if (answer === '1') {
-    console.log('\n📖 Please start Docker manually:');
-    console.log('   - macOS: Open Docker Desktop from Applications');
-    console.log('   - Linux: Run: sudo systemctl start docker');
-    console.log('   - Windows: Start Docker Desktop from Start Menu');
-    console.log('\nThen run: auraops check-local-gpu\n');
+    ui.blank();
+    ui.info('Please start Docker manually:');
+    process.stdout.write('   - macOS: Open Docker Desktop from Applications\n');
+    process.stdout.write('   - Linux: Run: sudo systemctl start docker\n');
+    process.stdout.write('   - Windows: Start Docker Desktop from Start Menu\n');
+    process.stdout.write('\nThen run: auraops check-local-gpu\n\n');
   } else {
-    console.log('ℹ️ Skipping local GPU setup\n');
+    ui.info('Skipping local GPU setup');
+    ui.blank();
   }
 }
 
 // Run if called directly
 if (require.main === module) {
-  checkLocalGpuSetup().catch((error) => {
-    console.error('❌ Error:', error.message);
+  checkLocalGpuSetup().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    ui.fail(`Error: ${message}`);
     process.exit(1);
   });
 }

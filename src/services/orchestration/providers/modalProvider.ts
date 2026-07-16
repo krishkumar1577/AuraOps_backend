@@ -18,6 +18,7 @@ const GPU_MEMORY_MAP: Record<string, number> = {
   L40S: 48,
 };
 
+/** Guide defaults (Modal pricing page); overridable via env. Not a live market feed. */
 const GPU_PRICE_MAP: Record<string, number> = {
   T4: 0.59,
   L4: 0.79,
@@ -26,6 +27,111 @@ const GPU_PRICE_MAP: Record<string, number> = {
   'A100-80GB': 3.95,
   H100: 4.89,
 };
+
+/** Short TTL cache for resolved Modal prices (guide map + env overrides). */
+const PRICE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface PriceCacheEntry {
+  prices: Record<string, number>;
+  expiresAt: number;
+}
+
+let priceCache: PriceCacheEntry | null = null;
+
+/** Normalize aliases: t4/T4, a100-80gb → A100-80GB. */
+export function normalizeModalGpuType(gpuType: string): string {
+  const raw = gpuType.trim();
+  if (!raw) return raw;
+
+  const upper = raw.toUpperCase().replace(/_/g, '-');
+  const aliases: Record<string, string> = {
+    T4: 'T4',
+    L4: 'L4',
+    A10G: 'A10G',
+    A10: 'A10G',
+    A100: 'A100',
+    'A100-40GB': 'A100',
+    'A100-40': 'A100',
+    'A100-80GB': 'A100-80GB',
+    'A100-80': 'A100-80GB',
+    H100: 'H100',
+    L40S: 'L40S',
+    H200: 'H200',
+  };
+
+  if (aliases[upper]) return aliases[upper];
+
+  const known = Object.keys(GPU_PRICE_MAP).find((k) => k.toUpperCase() === upper);
+  return known ?? raw;
+}
+
+function parsePositivePrice(value: string | undefined): number | undefined {
+  if (value === undefined || value === '') return undefined;
+  const n = parseFloat(value);
+  if (Number.isNaN(n) || n <= 0) return undefined;
+  return n;
+}
+
+/**
+ * Load price overrides from:
+ * - MODAL_PRICE_T4 / MODAL_PRICE_A100_80GB / …
+ * - AURAOPS_GPU_PRICE_JSON flat `{"T4":0.55}` or nested `{"modal":{"T4":0.55}}`
+ */
+function loadModalPriceOverrides(): Record<string, number> {
+  const overrides: Record<string, number> = {};
+
+  const jsonRaw = process.env.AURAOPS_GPU_PRICE_JSON;
+  if (jsonRaw) {
+    try {
+      const parsed = JSON.parse(jsonRaw) as Record<string, unknown>;
+      const modalSection = parsed.modal ?? parsed.Modal;
+      const flatOrNested =
+        modalSection && typeof modalSection === 'object' && !Array.isArray(modalSection)
+          ? (modalSection as Record<string, unknown>)
+          : parsed;
+
+      for (const [key, value] of Object.entries(flatOrNested)) {
+        if (typeof value === 'number' && value > 0) {
+          overrides[normalizeModalGpuType(key)] = value;
+        } else if (typeof value === 'string') {
+          const n = parsePositivePrice(value);
+          if (n !== undefined) overrides[normalizeModalGpuType(key)] = n;
+        }
+      }
+    } catch {
+      // ignore invalid JSON
+    }
+  }
+
+  for (const key of Object.keys(GPU_PRICE_MAP)) {
+    const envKey = `MODAL_PRICE_${key.replace(/-/g, '_').toUpperCase()}`;
+    const n = parsePositivePrice(process.env[envKey]);
+    if (n !== undefined) {
+      overrides[key] = n;
+    }
+  }
+
+  // Also accept MODAL_PRICE_t4 style (any case) via scanning known types only — already covered.
+
+  return overrides;
+}
+
+/** Resolve guide map + overrides; cached briefly so env reloads pick up without thrashing. */
+export function resolveModalPrices(forceRefresh = false): Record<string, number> {
+  const now = Date.now();
+  if (!forceRefresh && priceCache && priceCache.expiresAt > now) {
+    return priceCache.prices;
+  }
+
+  const prices = { ...GPU_PRICE_MAP, ...loadModalPriceOverrides() };
+  priceCache = { prices, expiresAt: now + PRICE_CACHE_TTL_MS };
+  return prices;
+}
+
+/** Test helper: clear in-memory price cache. */
+export function clearModalPriceCache(): void {
+  priceCache = null;
+}
 
 function selectGPU(minMemoryGB: number): string {
   const ranked = Object.entries(GPU_MEMORY_MAP)
@@ -83,12 +189,13 @@ export class ModalProvider extends BaseGPUProvider {
   async listAvailable(): Promise<GPUInstance[]> {
     this.requireConnection();
 
+    const prices = resolveModalPrices();
     return Object.entries(GPU_MEMORY_MAP).map(([gpuType, memoryGB]) => ({
       id: `modal-${gpuType.toLowerCase()}`,
       gpuType,
       memoryGB,
       available: true,
-      pricePerHour: GPU_PRICE_MAP[gpuType] ?? 0,
+      pricePerHour: prices[gpuType] ?? GPU_PRICE_MAP[gpuType] ?? 0,
     }));
   }
 
@@ -169,7 +276,9 @@ export class ModalProvider extends BaseGPUProvider {
   }
 
   async getPrice(gpuType: string): Promise<number> {
-    return GPU_PRICE_MAP[gpuType] ?? 0;
+    const normalized = normalizeModalGpuType(gpuType);
+    const prices = resolveModalPrices();
+    return prices[normalized] ?? 0;
   }
 
   async healthCheck(): Promise<boolean> {
@@ -282,7 +391,13 @@ export class ModalProvider extends BaseGPUProvider {
   async deployPersistentApp(
     deploymentId: string,
     blueprint: BlueprintJSON,
-    deployConfig?: { skipPipInstall?: boolean; cachedImageRef?: string; gpuCount?: number; enableMcp?: boolean },
+    deployConfig?: {
+      skipPipInstall?: boolean;
+      cachedImageRef?: string;
+      gpuCount?: number;
+      enableMcp?: boolean;
+      projectPath?: string;
+    },
   ): Promise<{ endpointUrl: string; appName: string; imageRef: string }> {
     const start = Date.now();
 
@@ -340,8 +455,12 @@ export class ModalProvider extends BaseGPUProvider {
       const appContent = ModalAppDeployer.generateModalApp(blueprint, deploymentId, deployConfig);
       logger.info(`Generated modal_app.py content:\n${appContent}`);
 
-      // Step 2: Write to temporary file
-      const appPath = await ModalAppDeployer.writeModalApp(appContent, deploymentId);
+      // Step 2: Write to temporary file (package user project when projectPath provided)
+      const appPath = await ModalAppDeployer.writeModalApp(
+        appContent,
+        deploymentId,
+        deployConfig?.projectPath,
+      );
 
       // Step 3: Deploy and get endpoint URL
       const endpointUrl = await ModalAppDeployer.deployApp(appPath, deploymentId);

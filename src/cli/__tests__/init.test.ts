@@ -11,6 +11,14 @@ jest.mock('../../utils/logger', () => ({
   },
 }));
 
+const mockGenerateLockfile = jest.fn();
+
+jest.mock('../../services/deterministic/dependencyLocking', () => ({
+  DependencyLocking: jest.fn().mockImplementation(() => ({
+    generateLockfile: mockGenerateLockfile,
+  })),
+}));
+
 import { initCommand, runInit } from '../init';
 
 describe('CLI: auraops init', () => {
@@ -25,6 +33,8 @@ describe('CLI: auraops init', () => {
     stdoutSpy = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
     stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
     exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+    mockGenerateLockfile.mockReset();
+    mockGenerateLockfile.mockRejectedValue(new Error('pip-tools not installed'));
   });
 
   afterEach(async () => {
@@ -173,5 +183,67 @@ numpy = "1.24.0"
     expect(blueprint.framework.primaryUse).toBe('agentic');
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('CrewAI detected (5 agents, 9 tools)'));
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Framework detected: crewai'));
+  });
+
+  it('should write requirements.lock when pip-compile succeeds', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'requirements.txt'),
+      'torch==2.1.0\n',
+    );
+    const cachedLock = path.join(tmpDir, 'cached.lock');
+    await fs.writeFile(cachedLock, 'torch==2.1.0\n# hash\n');
+    mockGenerateLockfile.mockResolvedValue({ lockPath: cachedLock, hash: 'abc' });
+
+    await runInit(tmpDir, {});
+
+    const lockPath = path.join(tmpDir, 'requirements.lock');
+    const lockContent = await fs.readFile(lockPath, 'utf-8');
+    expect(lockContent).toContain('torch==2.1.0');
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Lockfile written'));
+    expect(mockGenerateLockfile).toHaveBeenCalledWith(
+      path.join(tmpDir, 'requirements.txt'),
+      '3.11',
+    );
+  });
+
+  it('should continue init when dependency locking fails', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'requirements.txt'),
+      'torch==2.1.0\n',
+    );
+    mockGenerateLockfile.mockRejectedValue(new Error('pip-tools not installed'));
+
+    await runInit(tmpDir, {});
+
+    const blueprintPath = path.join(tmpDir, '.auraops', 'blueprint.json');
+    const exists = await fs.access(blueprintPath).then(() => true).catch(() => false);
+    expect(exists).toBe(true);
+    expect(stderrSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Dependency locking skipped'),
+    );
+  });
+
+  it('should generate temp requirements from pyproject deps for locking', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'pyproject.toml'),
+      `[tool.poetry.dependencies]
+torch = "2.1.0"
+numpy = "1.24.0"
+`,
+    );
+    const cachedLock = path.join(tmpDir, 'cached.lock');
+    await fs.writeFile(cachedLock, 'torch==2.1.0\nnumpy==1.24.0\n');
+    mockGenerateLockfile.mockResolvedValue({ lockPath: cachedLock, hash: 'def' });
+
+    await runInit(tmpDir, {});
+
+    expect(mockGenerateLockfile).toHaveBeenCalled();
+    const reqArg = mockGenerateLockfile.mock.calls[0][0] as string;
+    expect(reqArg).toContain('_requirements_for_lock.txt');
+    const lockExists = await fs
+      .access(path.join(tmpDir, 'requirements.lock'))
+      .then(() => true)
+      .catch(() => false);
+    expect(lockExists).toBe(true);
   });
 });

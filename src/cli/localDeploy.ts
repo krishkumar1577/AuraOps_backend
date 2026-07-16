@@ -3,11 +3,12 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import type { BlueprintJSON } from '../types/blueprint.types';
 import { ModalAppDeployer } from '../services/orchestration/modalAppDeployer';
+import { collectAgentEnvFromProcess } from '../services/orchestration/modalRuntimeConfig';
+import { resolveProjectRoot } from '../services/orchestration/userProjectDeploy';
 import {
   generateClaudeDesktopConfig,
   serializeClaudeDesktopConfig,
 } from '../services/mcp/mcpCardGenerator';
-import { DeploymentError } from '../utils/errors';
 import { config } from '../utils/config';
 import * as ui from './utils';
 
@@ -26,17 +27,12 @@ export interface LocalDeployResult {
   claudeDesktopConfigJson?: string;
 }
 
-function resolveModalTokens(): { tokenId: string; tokenSecret: string } {
-  const tokenId = process.env.MODAL_TOKEN_ID || config.modal_token_id;
-  const tokenSecret = process.env.MODAL_TOKEN_SECRET || config.modal_token_secret;
-
-  if (!tokenId || !tokenSecret) {
-    throw new DeploymentError(
-      'Modal credentials required for local deploy. Set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET in your environment or .env file.',
-    );
-  }
-
-  return { tokenId, tokenSecret };
+async function resolveModalTokens(): Promise<{ tokenId: string; tokenSecret: string }> {
+  // Interactive prompt when missing; non-interactive (CI) throws a clear error.
+  return ui.ensureModalCredentials({
+    tokenId: process.env.MODAL_TOKEN_ID || config.modal_token_id || undefined,
+    tokenSecret: process.env.MODAL_TOKEN_SECRET || config.modal_token_secret || undefined,
+  });
 }
 
 function resolveAuraopsDir(blueprintPath: string): string {
@@ -76,21 +72,32 @@ async function saveLocalDeploymentRecord(
 
 export async function runLocalDeploy(options: LocalDeployOptions): Promise<LocalDeployResult> {
   const start = Date.now();
-  resolveModalTokens();
+  await resolveModalTokens();
 
   const deploymentId = uuidv4();
   const { blueprint, blueprintPath, gpuCount, enableMcp } = options;
+
+  const projectPath = resolveProjectRoot(blueprintPath);
+  const { env: agentEnv, secretNames } = collectAgentEnvFromProcess();
 
   ui.info('Generating Modal app from blueprint...');
   const appContent = ModalAppDeployer.generateModalApp(blueprint, deploymentId, {
     gpuCount,
     enableMcp: enableMcp ?? false,
+    projectPath,
+    ...(agentEnv ? { env: agentEnv } : {}),
+    ...(secretNames ? { secretNames } : {}),
   });
 
-  const appPath = await ModalAppDeployer.writeModalApp(appContent, deploymentId);
+  const appPath = await ModalAppDeployer.writeModalApp(
+    appContent,
+    deploymentId,
+    projectPath,
+  );
   ui.step(`Modal app written: ${appPath}`);
+  ui.step(`User project packaged from: ${projectPath}`);
 
-  ui.info('Running modal deploy (this may take 30-60s)...');
+  ui.info('Running modal deploy (cold builds can take several minutes)...');
   const endpointUrl = await ModalAppDeployer.deployApp(appPath, deploymentId);
 
   const deployTimeMs = Date.now() - start;

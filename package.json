@@ -28,8 +28,11 @@
     "build": "tsc",
     "prepublishOnly": "npm run build",
     "start": "node dist/index.js",
-    "test": "jest",
-    "test:watch": "jest --watch",
+    "test": "jest --coverage=false",
+    "test:unit": "jest --coverage=false --testPathIgnorePatterns=integration",
+    "test:integration": "jest --coverage=false --testPathPattern=integration",
+    "test:ci": "jest --runInBand --coverage=false",
+    "test:watch": "jest --watch --coverage=false",
     "lint": "eslint src --ext .ts",
     "type-check": "tsc --noEmit"
   },

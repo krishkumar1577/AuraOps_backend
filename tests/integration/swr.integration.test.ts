@@ -94,7 +94,8 @@ describe('Phase 2: Smart Weight Registry Integration', () => {
 
     // Initialize services
     redisRegistry = new RedisWeightRegistry();
-    s3Manager = new S3WeightManager();
+    // Zero retry delay so failure/retry paths do not sleep (production default is 1s backoff).
+    s3Manager = new S3WeightManager({ retryDelayMs: 0 });
     volumeMounter = new VolumeMounter();
     jobQueue = new BackgroundJobQueue();
 

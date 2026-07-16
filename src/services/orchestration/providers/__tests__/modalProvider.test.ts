@@ -1,4 +1,8 @@
-import { ModalProvider } from '../modalProvider';
+import {
+  ModalProvider,
+  clearModalPriceCache,
+  normalizeModalGpuType,
+} from '../modalProvider';
 
 jest.mock('modal', () => ({
   ModalClient: jest.fn().mockImplementation(() => ({
@@ -19,10 +23,53 @@ jest.mock('modal', () => ({
 
 describe('ModalProvider', () => {
   let provider: ModalProvider;
+  const originalEnv = process.env;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env = { ...originalEnv };
+    delete process.env.MODAL_PRICE_T4;
+    delete process.env.MODAL_PRICE_A100;
+    delete process.env.AURAOPS_GPU_PRICE_JSON;
+    clearModalPriceCache();
     provider = new ModalProvider();
+  });
+
+  afterAll(() => {
+    process.env = originalEnv;
+  });
+
+  describe('getPrice', () => {
+    it('should return guide map price for T4', async () => {
+      expect(await provider.getPrice('T4')).toBe(0.59);
+    });
+
+    it('should normalize aliases (t4 → T4)', async () => {
+      expect(normalizeModalGpuType('t4')).toBe('T4');
+      expect(await provider.getPrice('t4')).toBe(0.59);
+      expect(await provider.getPrice('a100-80gb')).toBe(3.95);
+    });
+
+    it('should honor MODAL_PRICE_* env overrides', async () => {
+      process.env.MODAL_PRICE_T4 = '0.42';
+      clearModalPriceCache();
+      expect(await provider.getPrice('T4')).toBe(0.42);
+      expect(await provider.getPrice('t4')).toBe(0.42);
+    });
+
+    it('should honor AURAOPS_GPU_PRICE_JSON flat and nested modal overrides', async () => {
+      process.env.AURAOPS_GPU_PRICE_JSON = JSON.stringify({ T4: 0.33, A100: 2.1 });
+      clearModalPriceCache();
+      expect(await provider.getPrice('T4')).toBe(0.33);
+
+      process.env.AURAOPS_GPU_PRICE_JSON = JSON.stringify({ modal: { H100: 4.0 } });
+      clearModalPriceCache();
+      expect(await provider.getPrice('H100')).toBe(4.0);
+    });
+
+    it('should return 0 for unknown GPU type', async () => {
+      expect(await provider.getPrice('UnknownGPU')).toBe(0);
+    });
   });
 
   describe('getGpuUtilization', () => {

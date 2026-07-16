@@ -48,7 +48,7 @@ async function fetchLogs(apiUrl: string, deploymentId: string, headers: Record<s
 
 async function runLogs(deploymentId: string, options: { follow: boolean; tail?: string; token?: string }): Promise<void> {
   const apiUrl = ui.resolveApiUrl();
-  const headers = ui.getAuthHeaders(options.token);
+  const headers = await ui.resolveAuthHeaders(options.token);
   const tailCount = options.tail ? parseInt(options.tail, 10) : undefined;
 
   if (!options.follow) {

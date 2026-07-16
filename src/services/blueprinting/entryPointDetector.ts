@@ -119,15 +119,22 @@ export class EntryPointDetector {
     } catch {
       return null;
     }
-    let parsed: any;
+    interface PyprojectToml {
+      tool?: {
+        auraops?: { entry?: unknown };
+        poetry?: { scripts?: Record<string, unknown> };
+      };
+      project?: { scripts?: Record<string, unknown> };
+    }
+    let parsed: PyprojectToml;
     try {
-      parsed = TOML.parse(content);
+      parsed = TOML.parse(content) as PyprojectToml;
     } catch {
       return null;
     }
 
     // [tool.auraops] entry (future reserved slot, not auto-written)
-    const explicit = parsed?.tool?.auraops?.entry;
+    const explicit = parsed.tool?.auraops?.entry;
     if (typeof explicit === 'string' && explicit.length > 0) {
       if (await this.fileExists(projectPath, explicit)) {
         return explicit;
@@ -135,9 +142,9 @@ export class EntryPointDetector {
     }
 
     // [project.scripts] — take the first script whose value is a .py file.
-    const scripts = parsed?.project?.scripts;
+    const scripts = parsed.project?.scripts;
     if (scripts && typeof scripts === 'object') {
-      for (const value of Object.values(scripts) as string[]) {
+      for (const value of Object.values(scripts)) {
         if (typeof value !== 'string') continue;
         // values look like "myapp.main:run" — pull the .py part before ":"
         const moduleRef = value.split(':')[0];
@@ -149,9 +156,9 @@ export class EntryPointDetector {
     }
 
     // [tool.poetry.scripts] — same shape.
-    const poetryScripts = parsed?.tool?.poetry?.scripts;
+    const poetryScripts = parsed.tool?.poetry?.scripts;
     if (poetryScripts && typeof poetryScripts === 'object') {
-      for (const value of Object.values(poetryScripts) as string[]) {
+      for (const value of Object.values(poetryScripts)) {
         if (typeof value !== 'string') continue;
         const moduleRef = value.split(':')[0];
         const pyFile = moduleRef.replace(/\./g, '/') + '.py';

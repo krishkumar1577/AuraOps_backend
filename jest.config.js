@@ -13,4 +13,7 @@ module.exports = {
     '/node_modules/',
     '/dist/',
   ],
+  // Prefer natural exit. Timers in orchestration/SWR use .unref() / clearTimeout.
+  // If a suite hangs after tests, re-enable forceExit and run with --detectOpenHandles.
+  forceExit: false,
 };

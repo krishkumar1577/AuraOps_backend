@@ -28,7 +28,11 @@ const GPU_TYPE_MAP: Record<string, string> = {
   Standard_NC24ads_A100_v4: 'A100',
 };
 
-/** USD/hour list prices used for provider ranking (Azure < Modal < AWS). */
+/**
+ * USD/hour list prices used for provider ranking (guide map, not live Retail Prices API).
+ * Optional overrides: AZURE_PRICE_T4=0.85 or AURAOPS_GPU_PRICE_JSON={"azure":{"T4":0.85}}.
+ * Refresh: re-check Azure pricing calculator / Retail Prices API periodically and update map.
+ */
 export const AZURE_GPU_HOURLY_PRICES: Record<string, number> = {
   T4: 0.90,
   L4: 2.10,
@@ -36,6 +40,54 @@ export const AZURE_GPU_HOURLY_PRICES: Record<string, number> = {
   V100: 3.06,
   A100: 3.67,
 };
+
+function normalizeAzureGpuType(gpuType: string): string {
+  const upper = gpuType.trim().toUpperCase().replace(/_/g, '-');
+  if (upper === 'A10') return 'A10G';
+  const known = Object.keys(AZURE_GPU_HOURLY_PRICES).find((k) => k.toUpperCase() === upper);
+  return known ?? gpuType.trim();
+}
+
+function loadAzurePriceOverrides(): Record<string, number> {
+  const overrides: Record<string, number> = {};
+
+  const jsonRaw = process.env.AURAOPS_GPU_PRICE_JSON;
+  if (jsonRaw) {
+    try {
+      const parsed = JSON.parse(jsonRaw) as Record<string, unknown>;
+      const azureSection = parsed.azure ?? parsed.Azure;
+      if (azureSection && typeof azureSection === 'object' && !Array.isArray(azureSection)) {
+        for (const [key, value] of Object.entries(azureSection as Record<string, unknown>)) {
+          if (typeof value === 'number' && value > 0) {
+            overrides[normalizeAzureGpuType(key)] = value;
+          } else if (typeof value === 'string') {
+            const n = parseFloat(value);
+            if (!Number.isNaN(n) && n > 0) overrides[normalizeAzureGpuType(key)] = n;
+          }
+        }
+      }
+    } catch {
+      // ignore invalid JSON
+    }
+  }
+
+  for (const key of Object.keys(AZURE_GPU_HOURLY_PRICES)) {
+    const envKey = `AZURE_PRICE_${key.replace(/-/g, '_').toUpperCase()}`;
+    const raw = process.env[envKey];
+    if (raw) {
+      const n = parseFloat(raw);
+      if (!Number.isNaN(n) && n > 0) overrides[key] = n;
+    }
+  }
+
+  return overrides;
+}
+
+function resolveAzurePrice(gpuType: string): number {
+  const normalized = normalizeAzureGpuType(gpuType);
+  const overrides = loadAzurePriceOverrides();
+  return overrides[normalized] ?? AZURE_GPU_HOURLY_PRICES[normalized] ?? 2.5;
+}
 
 export interface AzureComputeClient {
   virtualMachineSizes: {
@@ -167,7 +219,7 @@ export class AzureGPUProvider extends BaseGPUProvider {
           memoryGB,
           available: true,
           region: this.location,
-          pricePerHour: AZURE_GPU_HOURLY_PRICES[gpuType] ?? 2.5,
+          pricePerHour: resolveAzurePrice(gpuType),
         });
       }
 
@@ -274,7 +326,7 @@ export class AzureGPUProvider extends BaseGPUProvider {
 
   async getPrice(gpuType: string, _region?: string): Promise<number> {
     this.requireConnection();
-    return AZURE_GPU_HOURLY_PRICES[gpuType] ?? 2.5;
+    return resolveAzurePrice(gpuType);
   }
 
   async healthCheck(): Promise<boolean> {

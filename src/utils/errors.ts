@@ -3,7 +3,7 @@ export class AuraOpsError extends Error {
     public code: string,
     message: string,
     public statusCode: number = 500,
-    public details?: Record<string, any>,
+    public details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'AuraOpsError';
@@ -11,7 +11,7 @@ export class AuraOpsError extends Error {
 }
 
 export class ValidationError extends AuraOpsError {
-  constructor(message: string, details?: Record<string, any>) {
+  constructor(message: string, details?: Record<string, unknown>) {
     super('VALIDATION_ERROR', message, 400, details);
     this.name = 'ValidationError';
   }
@@ -39,7 +39,7 @@ export class ManifestParsingError extends AuraOpsError {
 }
 
 export class DeploymentError extends AuraOpsError {
-  constructor(message: string, details?: Record<string, any>) {
+  constructor(message: string, details?: Record<string, unknown>) {
     super('DEPLOYMENT_ERROR', message, 500, details);
     this.name = 'DeploymentError';
   }

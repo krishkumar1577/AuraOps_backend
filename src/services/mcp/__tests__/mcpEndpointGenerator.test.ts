@@ -18,11 +18,20 @@ describe('mcpEndpointGenerator', () => {
       expect(code).toContain('call_tool');
     });
 
+    it('should bridge to agent via AURAOPS_AGENT_URL HTTP helper', () => {
+      const code = generateMcpServerWrapper({ deploymentId });
+
+      expect(code).toContain('AURAOPS_AGENT_URL');
+      expect(code).toContain('_invoke_agent_http');
+      expect(code).toContain('AGENT_ENDPOINT_URL');
+      expect(code).not.toContain('[MCP stub]');
+    });
+
     it('should support custom tool name', () => {
       const code = generateMcpServerWrapper({ deploymentId, toolName: 'run_inference' });
 
-      expect(code).toContain('run_inference');
-      expect(code).not.toContain('invoke_agent');
+      expect(code).toContain('name="run_inference"');
+      expect(code).not.toContain('name="invoke_agent"');
     });
   });
 

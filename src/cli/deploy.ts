@@ -3,6 +3,8 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import axios from 'axios';
 import type { BlueprintJSON } from '../types/blueprint.types';
+import { resolveProjectRoot } from '../services/orchestration/userProjectDeploy';
+import { packProjectBundle } from '../services/orchestration/projectBundle';
 import * as ui from './utils';
 import { runFleetDeploy } from './fleet';
 import { runLocalDeploy } from './localDeploy';
@@ -45,13 +47,6 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function resolveProjectRoot(blueprintPath: string): string {
-  const blueprintDir = path.dirname(blueprintPath);
-  return path.basename(blueprintDir) === '.auraops'
-    ? path.resolve(blueprintDir, '..')
-    : blueprintDir;
 }
 
 function printDeploySummary(options: {
@@ -162,6 +157,13 @@ async function runServerDeploy(
   gpuCount: number,
   start: number,
 ): Promise<void> {
+  const provider = (options.provider ?? 'auto').toLowerCase();
+  if (provider === 'azure' || provider === 'aws') {
+    ui.warn(
+      `Provider "${options.provider}" is partial — full user-code deploy path is Modal-first. Azure/AWS may not run agent code end-to-end yet.`,
+    );
+  }
+
   const projectPath = resolveProjectRoot(blueprintPath);
   const requirementsLock = path.join(projectPath, 'requirements.lock');
   const requirementsTxt = path.join(projectPath, 'requirements.txt');
@@ -172,10 +174,30 @@ async function runServerDeploy(
       : '';
 
   const apiUrl = ui.resolveApiUrl();
-  const headers = ui.getAuthHeaders(options.token);
+  const headers = await ui.resolveAuthHeaders(options.token);
 
   const syncStart = Date.now();
   ui.info('Syncing agent logic to AuraOps server...');
+
+  let bundle: Awaited<ReturnType<typeof packProjectBundle>>;
+  try {
+    bundle = await packProjectBundle(projectPath);
+  } catch (err) {
+    ui.warn(
+      'Project pack failed. Large weight/model files are auto-skipped; host weights on S3 or Hugging Face and list them in blueprint customModels.',
+    );
+    const msg = err instanceof Error ? err.message : String(err);
+    ui.fail(msg);
+    throw err;
+  }
+
+  const skipNote =
+    bundle.skippedFiles > 0
+      ? `; skipped ${bundle.skippedFiles} large/weight files (${bundle.skippedBytes} bytes)`
+      : '';
+  ui.info(
+    `Packed project bundle: ${bundle.fileCount} files (${bundle.uncompressedBytes} bytes)${skipNote}`,
+  );
 
   const deployPayload = {
     blueprintId: blueprint.id,
@@ -190,6 +212,8 @@ async function runServerDeploy(
     gpuCount,
     enableMcp: options.mcp ?? false,
     provider: options.provider && options.provider !== 'local' ? options.provider : 'auto',
+    projectBundleBase64: bundle.projectBundleBase64,
+    projectBundleFormat: bundle.projectBundleFormat,
   };
 
   let deployResult: {
@@ -207,7 +231,9 @@ async function runServerDeploy(
 
   try {
     const response = await axios.post(`${apiUrl}/api/v1/deploy`, deployPayload, {
-      timeout: 60000,
+      timeout: 120000,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
       headers,
     });
     deployResult = response.data as typeof deployResult;

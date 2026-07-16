@@ -4,12 +4,78 @@ import * as path from 'path';
 import { ManifestParser } from '../services/blueprinting/manifestParser';
 import { FrameworkDetector } from '../services/blueprinting/frameworkDetector';
 import { BlueprintGenerator } from '../services/blueprinting/blueprintGenerator';
-import type { BlueprintJSON } from '../types/blueprint.types';
+import type { BlueprintJSON, ParsedManifest } from '../types/blueprint.types';
 import { CrewAIDetector, LangGraphDetector } from '../services/blueprinting/frameworkDetectors';
+import { DependencyLocking } from '../services/deterministic/dependencyLocking';
 import * as ui from './utils';
 
 interface InitOptions {
   output?: string;
+}
+
+function resolvePythonVersion(raw: string): string {
+  const match = raw?.match(/3\.(9|10|11|12)/);
+  return match ? `3.${match[1]}` : '3.11';
+}
+
+function toRequirementLine(name: string, version: string): string {
+  if (!version || version === 'latest' || version === '*') {
+    return name;
+  }
+  if (/^[<>=!~]/.test(version) || version.includes(',')) {
+    return `${name}${version}`;
+  }
+  return `${name}==${version}`;
+}
+
+/**
+ * Best-effort pip-compile lockfile. Non-fatal if pip-tools is missing or compile fails.
+ * Writes `requirements.lock` at the project root for deploy/fleet consumers.
+ */
+async function tryGenerateLockfile(
+  projectPath: string,
+  manifest: ParsedManifest,
+): Promise<void> {
+  const lockStart = Date.now();
+  let tempRequirementsPath: string | null = null;
+
+  try {
+    const existingRequirements = path.join(projectPath, 'requirements.txt');
+    let requirementsPath = existingRequirements;
+
+    try {
+      await fs.access(existingRequirements);
+    } catch {
+      const deps = manifest.allDependencies ?? {};
+      if (Object.keys(deps).length === 0) {
+        return;
+      }
+
+      const auraopsDir = path.join(projectPath, '.auraops');
+      await fs.mkdir(auraopsDir, { recursive: true });
+      tempRequirementsPath = path.join(auraopsDir, '_requirements_for_lock.txt');
+      const lines = Object.entries(deps).map(([name, ver]) =>
+        toRequirementLine(name, typeof ver === 'string' ? ver : String(ver)),
+      );
+      await fs.writeFile(tempRequirementsPath, `${lines.join('\n')}\n`);
+      requirementsPath = tempRequirementsPath;
+    }
+
+    const pythonVersion = resolvePythonVersion(manifest.pythonVersion);
+    const locking = new DependencyLocking();
+    const result = await locking.generateLockfile(requirementsPath, pythonVersion);
+
+    const destPath = path.join(projectPath, 'requirements.lock');
+    await fs.copyFile(result.lockPath, destPath);
+    ui.step(`Lockfile written: ${destPath}`, ui.formatMs(Date.now() - lockStart));
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    ui.warn(`Dependency locking skipped (pip-compile optional): ${message}`);
+  } finally {
+    if (tempRequirementsPath) {
+      await fs.unlink(tempRequirementsPath).catch(() => undefined);
+    }
+  }
 }
 
 export async function runInit(projectPath: string, options: InitOptions): Promise<void> {
@@ -37,6 +103,8 @@ export async function runInit(projectPath: string, options: InitOptions): Promis
   const manifest = await parser.parse(resolvedPath);
   const depCount = Object.keys(manifest.allDependencies).length;
   ui.step(`Manifest parsed (${depCount} dependencies)`, ui.formatMs(Date.now() - parseStart));
+
+  await tryGenerateLockfile(resolvedPath, manifest);
 
   const langGraphStart = Date.now();
   const langGraphAnalysis = await langGraphDetector.analyze(resolvedPath);

@@ -2,11 +2,22 @@ import { logger } from '../../utils/logger';
 import type { GPUProvider, WorkerRequirements, WorkerInfo } from './orchestrator';
 import { PROVIDER_DEFAULT_HOURLY_PRICES } from './deployProviderFallback';
 
+/** How the hourly quote was obtained for ranking. */
+export type PriceSource = 'live-list' | 'getPrice' | 'default-map';
+
 export interface ProviderQuote {
   provider: GPUProvider;
   name: string;
   pricePerHour: number;
   gpuType: string;
+  priceSource: PriceSource;
+}
+
+interface AvailableGpuLike {
+  gpuType: string;
+  memoryGB: number;
+  available?: boolean;
+  pricePerHour?: number;
 }
 
 /**
@@ -52,7 +63,7 @@ export class ProviderRegistry {
       const worker = await quote.provider.acquireWorker(requirements);
       if (worker) {
         logger.info(
-          `✓ Provider registry selected ${quote.name} (${quote.gpuType}, $${quote.pricePerHour}/hr) in ${Date.now() - start}ms`,
+          `✓ Provider registry selected ${quote.name} (${quote.gpuType}, $${quote.pricePerHour}/hr, source=${quote.priceSource}) in ${Date.now() - start}ms`,
         );
         return worker;
       }
@@ -65,33 +76,92 @@ export class ProviderRegistry {
     const quotes: ProviderQuote[] = [];
 
     for (const provider of this.providers) {
-      const price = await this.estimatePrice(provider, requirements.minGPUMemory);
+      const quote = await this.estimateQuote(provider, requirements.minGPUMemory);
       quotes.push({
         provider,
         name: provider.name,
-        pricePerHour: price,
-        gpuType: this.gpuTypeForMemory(requirements.minGPUMemory),
+        pricePerHour: quote.pricePerHour,
+        gpuType: quote.gpuType,
+        priceSource: quote.priceSource,
       });
+      logger.info(
+        `Provider quote: ${provider.name} ${quote.gpuType} $${quote.pricePerHour}/hr source=${quote.priceSource}`,
+      );
     }
 
     return quotes.sort((a, b) => a.pricePerHour - b.pricePerHour);
   }
 
-  private async estimatePrice(provider: GPUProvider, minMemoryGB: number): Promise<number> {
-    const gpuType = this.gpuTypeForMemory(minMemoryGB);
+  /**
+   * Prefer live listAvailable() cheapest matching memory; else getPrice(mapped type); else default map.
+   */
+  private async estimateQuote(
+    provider: GPUProvider,
+    minMemoryGB: number,
+  ): Promise<{ pricePerHour: number; gpuType: string; priceSource: PriceSource }> {
+    const mappedGpuType = this.gpuTypeForMemory(minMemoryGB);
+
+    const listFn = (provider as GPUProvider & {
+      listAvailable?: () => Promise<AvailableGpuLike[]>;
+    }).listAvailable;
+
+    if (typeof listFn === 'function') {
+      try {
+        const available = await listFn.call(provider);
+        const matching = available
+          .filter(
+            (gpu) =>
+              gpu.available !== false &&
+              gpu.memoryGB >= minMemoryGB &&
+              typeof gpu.pricePerHour === 'number' &&
+              gpu.pricePerHour > 0,
+          )
+          .sort((a, b) => (a.pricePerHour ?? 0) - (b.pricePerHour ?? 0));
+
+        if (matching.length > 0) {
+          const best = matching[0];
+          return {
+            pricePerHour: best.pricePerHour as number,
+            gpuType: best.gpuType,
+            priceSource: 'live-list',
+          };
+        }
+      } catch (error) {
+        logger.warn(
+          `listAvailable failed for ${provider.name}, falling back to getPrice: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
     if ('getPrice' in provider && typeof (provider as { getPrice?: unknown }).getPrice === 'function') {
       try {
-        const price = await (provider as GPUProvider & { getPrice: (g: string) => Promise<number> }).getPrice(gpuType);
+        const price = await (
+          provider as GPUProvider & { getPrice: (g: string) => Promise<number> }
+        ).getPrice(mappedGpuType);
         if (price > 0) {
-          return price;
+          return {
+            pricePerHour: price,
+            gpuType: mappedGpuType,
+            priceSource: 'getPrice',
+          };
         }
       } catch {
-        return Number.POSITIVE_INFINITY;
+        return {
+          pricePerHour: Number.POSITIVE_INFINITY,
+          gpuType: mappedGpuType,
+          priceSource: 'getPrice',
+        };
       }
     }
 
     const defaultPrice = PROVIDER_DEFAULT_HOURLY_PRICES[provider.name.toLowerCase()];
-    return defaultPrice ?? 999;
+    return {
+      pricePerHour: defaultPrice ?? 999,
+      gpuType: mappedGpuType,
+      priceSource: 'default-map',
+    };
   }
 
   private gpuTypeForMemory(minMemoryGB: number): string {

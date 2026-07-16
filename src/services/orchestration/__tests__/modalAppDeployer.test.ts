@@ -197,6 +197,132 @@ describe('ModalAppDeployer', () => {
 
       expect(code).toContain('@modal.enter()');
       expect(code).toContain('def load(self)');
+      expect(code).toContain('AURAOPS_MODEL_PATH');
+      expect(code).toContain('/models/llama-7b');
+    });
+  });
+
+  describe('Secrets and env injection', () => {
+    it('should inject env via os.environ.setdefault in load()', () => {
+      const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_env123', {
+        env: {
+          OPENAI_API_KEY: 'sk-test-key',
+          ANTHROPIC_API_KEY: 'ant-test',
+        },
+      });
+
+      expect(code).toContain('os.environ.setdefault');
+      expect(code).toContain('OPENAI_API_KEY');
+      expect(code).toContain('sk-test-key');
+      expect(code).toContain('ANTHROPIC_API_KEY');
+      // Env bootstrap must live inside load(), not at module level
+      const beforeClass = code.split('class AuraOpsAgent')[0];
+      expect(beforeClass).not.toContain('os.environ.setdefault');
+      expect(beforeClass).not.toContain('import torch');
+    });
+
+    it('should attach Modal secrets on @app.cls when secretNames provided', () => {
+      const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_sec123', {
+        secretNames: ['auraops-agent'],
+      });
+
+      expect(code).toContain('modal.Secret.from_name("auraops-agent")');
+      expect(code).toContain('secrets=[');
+    });
+
+    it('should not emit secrets= when secretNames omitted', () => {
+      const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_nosec');
+
+      expect(code).not.toContain('Secret.from_name');
+      expect(code).not.toContain('secrets=[');
+    });
+  });
+
+  describe('Custom model weight bootstrap', () => {
+    it('should generate https download bootstrap and model path', () => {
+      const customBlueprint: BlueprintJSON = {
+        ...mockBlueprint,
+        customModels: [
+          {
+            name: 'my-weights',
+            path: 'https://example.com/weights/model.bin',
+            hash: 'abc123hash',
+            size: 1000,
+          },
+        ],
+      };
+
+      const code = ModalAppDeployer.generateModalApp(customBlueprint, 'dep_http_weights');
+
+      expect(code).toContain('urllib.request');
+      expect(code).toContain('/models/abc123hash');
+      expect(code).toContain('AURAOPS_MODEL_PATH');
+      expect(code).toContain('https://example.com/weights/model.bin');
+      // Shared fridge: Volume + exists-check before download + commit on fill
+      expect(code).toContain('modal.Volume.from_name("auraops-weights"');
+      expect(code).toContain('create_if_missing=True');
+      expect(code).toContain('volumes={"/models": weights_vol}');
+      expect(code).toContain('if not os.path.exists(_dest_0):');
+      expect(code).toContain('weights_vol.commit()');
+      expect(code).toContain('Weight cache hit');
+    });
+
+    it('should generate s3 download bootstrap and include boto3 dep', () => {
+      const customBlueprint: BlueprintJSON = {
+        ...mockBlueprint,
+        customModels: [
+          {
+            name: 's3-model',
+            path: 's3://aura-weights/models/llama.bin',
+            hash: 's3hash99',
+            size: 2000,
+          },
+        ],
+      };
+
+      const code = ModalAppDeployer.generateModalApp(customBlueprint, 'dep_s3_weights');
+
+      expect(code).toContain('import boto3');
+      expect(code).toContain('download_file');
+      expect(code).toContain('/models/s3hash99');
+      expect(code).toContain('AURAOPS_MODEL_PATH');
+      expect(code).toContain('"boto3"');
+      expect(code).toContain('modal.Volume.from_name("auraops-weights"');
+      expect(code).toContain('volumes={"/models": weights_vol}');
+      expect(code).toContain('if not os.path.exists(_dest_0):');
+      expect(code).toContain('weights_vol.commit()');
+    });
+
+    it('should skip weight bootstrap and volume when customModels is empty', () => {
+      const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_no_weights');
+
+      expect(code).not.toContain('AURAOPS_MODEL_PATH');
+      expect(code).not.toContain('download_file');
+      expect(code).not.toContain('urlretrieve');
+      expect(code).not.toContain('Volume.from_name');
+      expect(code).not.toContain('volumes=');
+      expect(code).not.toContain('weights_vol');
+    });
+
+    it('should not mount weight volume for local-only custom model paths', () => {
+      const customBlueprint: BlueprintJSON = {
+        ...mockBlueprint,
+        customModels: [
+          {
+            name: 'meta-llama/Llama-2-7b',
+            path: '/models/llama-7b',
+            hash: 'sha256_model',
+            size: 13500000000,
+          },
+        ],
+      };
+
+      const code = ModalAppDeployer.generateModalApp(customBlueprint, 'dep_local_model');
+
+      expect(code).toContain('AURAOPS_MODEL_PATH');
+      expect(code).not.toContain('Volume.from_name');
+      expect(code).not.toContain('volumes=');
+      expect(code).not.toContain('weights_vol.commit');
     });
   });
 
@@ -334,6 +460,65 @@ describe('ModalAppDeployer', () => {
       expect(code).toContain('elif framework == "langgraph":');
       expect(code).toContain('self.compiled_graph.invoke');
       expect(code).toContain('SqliteSaver');
+    });
+  });
+
+  describe('User project deploy path', () => {
+    it('should include add_local_dir, /app, and user_runner when projectPath is set', () => {
+      const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_proj123', {
+        projectPath: '/tmp/fake-project',
+      });
+
+      expect(code).toContain('add_local_dir("project"');
+      expect(code).toContain('/app');
+      expect(code).toContain('user_runner');
+      expect(code).toContain('_run_user_inference');
+    });
+
+    it('should include apt_install when systemPackages are non-empty', () => {
+      const blueprintWithApt: BlueprintJSON = {
+        ...mockBlueprint,
+        systemRequirements: {
+          ...mockBlueprint.systemRequirements,
+          systemPackages: ['libgl1', 'ffmpeg'],
+        },
+      };
+
+      const code = ModalAppDeployer.generateModalApp(blueprintWithApt, 'dep_apt123');
+
+      expect(code).toContain('apt_install');
+      expect(code).toContain('"libgl1"');
+      expect(code).toContain('"ffmpeg"');
+    });
+
+    it('should not include add_local_dir when projectPath is not set', () => {
+      const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_no_proj');
+
+      expect(code).not.toContain('add_local_dir');
+      expect(code).not.toContain('_run_user_inference');
+    });
+
+    it('should keep lazy import rule with projectPath set (KRI-17)', () => {
+      const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_lazy_proj', {
+        projectPath: '/tmp/fake-project',
+      });
+      const beforeClass = code.split('class AuraOpsAgent')[0];
+
+      expect(beforeClass).toContain('import modal');
+      expect(beforeClass).not.toMatch(
+        /from langchain|from transformers|import torch|import tensorflow|import jax/,
+      );
+      expect(beforeClass).not.toContain('from typing import');
+    });
+
+    it('should include framework fallback when projectPath is set', () => {
+      const code = ModalAppDeployer.generateModalApp(mockBlueprint, 'dep_fallback', {
+        projectPath: '/tmp/fake-project',
+      });
+
+      expect(code).toMatch(/falling back|initialize_agent/);
+      expect(code).toContain('falling back to framework scaffold');
+      expect(code).toContain('from langchain.agents import initialize_agent');
     });
   });
 });

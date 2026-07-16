@@ -196,17 +196,16 @@ export class HealthCheck {
     const url = `http://${host}:${port}/health`;
     const startTime = Date.now();
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeout);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    timeoutId.unref?.();
 
+    try {
       const response = await fetch(url, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
       });
-
-      clearTimeout(timeoutId);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -216,14 +215,16 @@ export class HealthCheck {
       const latency = Date.now() - startTime;
 
       // Validate response structure
+      if (typeof data !== 'object' || data === null) {
+        throw new Error('Invalid health response structure');
+      }
+      const record = data as Record<string, unknown>;
       if (
-        typeof data !== 'object' ||
-        data === null ||
-        typeof (data as Record<string, any>).healthy !== 'boolean' ||
-        typeof (data as Record<string, any>).latency !== 'number' ||
-        !(data as Record<string, any>).memory ||
-        !(data as Record<string, any>).gpu ||
-        typeof (data as Record<string, any>).uptime !== 'number'
+        typeof record.healthy !== 'boolean' ||
+        typeof record.latency !== 'number' ||
+        !record.memory ||
+        !record.gpu ||
+        typeof record.uptime !== 'number'
       ) {
         throw new Error('Invalid health response structure');
       }
@@ -266,13 +267,19 @@ export class HealthCheck {
         latency,
         url,
       });
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
   /**
-   * Helper: delay for a given number of milliseconds
+   * Helper: delay for a given number of milliseconds.
+   * unref so the timer does not keep the process alive on its own.
    */
   private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    return new Promise((resolve) => {
+      const t = setTimeout(resolve, ms);
+      t.unref?.();
+    });
   }
 }

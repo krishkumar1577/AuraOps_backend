@@ -29,5 +29,8 @@ jobs:
       - name: Type check
         run: npm run type-check
 
-      - name: Test
-        run: npm test -- --runInBand
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Integration tests
+        run: npm run test:integration

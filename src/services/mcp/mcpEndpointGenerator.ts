@@ -15,11 +15,57 @@ export function generateMcpServerWrapper(options: McpEndpointOptions): string {
 AuraOps MCP Server Wrapper
 Deployment ID: ${deploymentId}
 Transport: stdio (Model Context Protocol)
+
+Bridges tool calls to the agent HTTP endpoint via AURAOPS_AGENT_URL
+(or AGENT_ENDPOINT_URL). Prefer the unified ASGI MCP routes on the
+Modal URL when available — this stdio wrapper is for local MCP clients.
 """
 
 import asyncio
 import json
+import os
 import sys
+import urllib.error
+import urllib.request
+
+
+def _invoke_agent_http(input_text: str, metadata: dict) -> dict:
+    agent_url = os.environ.get("AURAOPS_AGENT_URL") or os.environ.get("AGENT_ENDPOINT_URL")
+    if not agent_url:
+        return {
+            "error": (
+                "MCP stdio bridge not configured. Set AURAOPS_AGENT_URL "
+                "(or AGENT_ENDPOINT_URL) to the agent HTTP endpoint, "
+                "or use the unified HTTP MCP routes on the Modal URL."
+            ),
+            "deployment_id": "${deploymentId}",
+        }
+
+    payload = json.dumps({"input": input_text, "metadata": metadata or {}}).encode("utf-8")
+    req = urllib.request.Request(
+        agent_url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = resp.read().decode("utf-8")
+            try:
+                return json.loads(body)
+            except json.JSONDecodeError:
+                return {"output": body, "deployment_id": "${deploymentId}"}
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace") if e.fp else str(e)
+        return {
+            "error": f"Agent HTTP {e.code}: {err_body}",
+            "deployment_id": "${deploymentId}",
+        }
+    except Exception as e:
+        return {
+            "error": f"Agent HTTP request failed: {e}",
+            "deployment_id": "${deploymentId}",
+        }
 
 
 async def _run_stdio_server() -> None:
@@ -51,14 +97,9 @@ async def _run_stdio_server() -> None:
         if name != "${toolName}":
             raise ValueError(f"Unknown tool: {name}")
 
-        # Agent invocation is wired at deploy time via HTTP endpoint bridge
         input_text = arguments.get("input", "")
         metadata = arguments.get("metadata", {})
-        result = {
-            "output": f"[MCP stub] Received input: {input_text}",
-            "deployment_id": "${deploymentId}",
-            "metadata": metadata,
-        }
+        result = await asyncio.to_thread(_invoke_agent_http, input_text, metadata)
         return [TextContent(type="text", text=json.dumps(result))]
 
     async with stdio_server() as (read_stream, write_stream):

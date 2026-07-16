@@ -1,6 +1,9 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
 import {
   Orchestrator,
   DeploymentRecord,
@@ -9,6 +12,10 @@ import {
 import { RedisWeightRegistry } from '../../services/swr/redisClient';
 import { ImageLayerCache } from '../../services/swr/imageLayerCache';
 import { ModalAppDeployer } from '../../services/orchestration/modalAppDeployer';
+import {
+  unpackProjectBundle,
+  PROJECT_BUNDLE_FORMAT_FILES_V1,
+} from '../../services/orchestration/projectBundle';
 import { DeploymentError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { config } from '../../utils/config';
@@ -27,6 +34,9 @@ const GPURequirementsSchema = z.object({
   framework: z.string().min(1, 'Framework name required'),
   pythonVersion: z.string().regex(/^\d+\.\d+/, 'Invalid Python version format'),
 });
+
+/** ~22MB base64 ≈ enough for 15MB uncompressed files-v1 payload + JSON wrapper. */
+const MAX_PROJECT_BUNDLE_BASE64_CHARS = 30_000_000;
 
 const DeployRequestSchema = z.object({
   blueprintId: z.string().uuid('Invalid blueprint ID format'),
@@ -57,6 +67,9 @@ const DeployRequestSchema = z.object({
   gpuCount: z.number().int().min(1, 'GPU count must be at least 1').max(8, 'GPU count cannot exceed 8').optional().default(1),
   enableMcp: z.boolean().optional().default(false),
   provider: z.enum(['auto', 'modal', 'azure', 'aws']).optional().default('auto'),
+  /** Optional base64-encoded project source bundle (files-v1 JSON map). */
+  projectBundleBase64: z.string().max(MAX_PROJECT_BUNDLE_BASE64_CHARS).optional(),
+  projectBundleFormat: z.enum(['files-v1', 'targz']).optional().default(PROJECT_BUNDLE_FORMAT_FILES_V1),
 });
 
 const DeploymentIdParamSchema = z.object({
@@ -129,6 +142,7 @@ export async function deploymentRoutes(
     '/api/v1/deploy',
     async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
       const startTime = Date.now();
+      let unpackedProjectDir: string | undefined;
 
       try {
         // Validate request body
@@ -156,6 +170,8 @@ export async function deploymentRoutes(
           gpuCount,
           enableMcp,
           provider: preferredProvider,
+          projectBundleBase64,
+          projectBundleFormat,
         } = validatedData;
 
         const deploymentId = uuidv4();
@@ -201,6 +217,27 @@ export async function deploymentRoutes(
         } else {
           logger.info(`○ Image layer cache miss for ${blueprintJson.framework?.framework}:${blueprintJson.framework?.version}`);
           deployConfig.skipPipInstall = false;
+        }
+
+        // Unpack optional user project bundle so Modal can package real code
+        if (projectBundleBase64) {
+          unpackedProjectDir = path.join(os.tmpdir(), `auraops-project-${deploymentId}`);
+          try {
+            await unpackProjectBundle(
+              projectBundleBase64,
+              unpackedProjectDir,
+              projectBundleFormat,
+            );
+            deployConfig.projectPath = unpackedProjectDir;
+            logger.info(`Unpacked project bundle to ${unpackedProjectDir}`);
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            logger.error(`Failed to unpack project bundle: ${msg}`, { deploymentId });
+            return reply.code(400).send({
+              success: false,
+              error: `Invalid project bundle: ${msg}`,
+            });
+          }
         }
 
         // Skip sandbox acquisition entirely
@@ -340,6 +377,19 @@ export async function deploymentRoutes(
           error: err.message,
           details: err.details,
         });
+      } finally {
+        if (unpackedProjectDir) {
+          try {
+            await fs.rm(unpackedProjectDir, { recursive: true, force: true });
+            logger.info(`Cleaned up unpacked project at ${unpackedProjectDir}`);
+          } catch (cleanupErr) {
+            logger.warn(
+              `Failed to clean up unpacked project ${unpackedProjectDir}: ${
+                cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
+              }`,
+            );
+          }
+        }
       }
     },
   );

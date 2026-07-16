@@ -6,12 +6,32 @@ import { DeploymentError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import type { BlueprintJSON } from '../../types/blueprint.types';
 import { generateMcpUnifiedAsgiStub } from '../mcp/mcpEndpointGenerator';
+import {
+  formatAptPackages,
+  generateUserCodeLoaderPython,
+  generateUserInferencePython,
+  PROJECT_REMOTE_ROOT,
+  projectCopyFilter,
+} from './userProjectDeploy';
+import {
+  formatModalSecretsArg,
+  formatModalVolumesArg,
+  generateRuntimeBootstrapPython,
+  generateWeightVolumePython,
+  needsBoto3ForModels,
+} from './modalRuntimeConfig';
 
 export interface ModalDeployConfig {
   skipPipInstall?: boolean;
   cachedImageRef?: string;
   gpuCount?: number;
   enableMcp?: boolean;
+  /** Absolute path to user project root (files copied next to modal_app for add_local_dir) */
+  projectPath?: string;
+  /** Plain env vars injected into load() via os.environ.setdefault (deploy-time values). */
+  env?: Record<string, string>;
+  /** Modal secret names attached via modal.Secret.from_name on @app.cls. */
+  secretNames?: string[];
 }
 
 /**
@@ -38,6 +58,16 @@ export class ModalAppDeployer {
       const cachedImageRef = deployConfig?.cachedImageRef;
       const gpuCount = deployConfig?.gpuCount ?? 1;
       const enableMcp = deployConfig?.enableMcp ?? false;
+      const includeUserProject = Boolean(deployConfig?.projectPath);
+      const agentEnv = deployConfig?.env;
+      const secretNames = deployConfig?.secretNames;
+      const secretsArg = formatModalSecretsArg(secretNames);
+      const volumesArg = formatModalVolumesArg(blueprint.customModels);
+      const weightVolumePython = generateWeightVolumePython(blueprint.customModels);
+      const runtimeBootstrap = generateRuntimeBootstrapPython({
+        env: agentEnv,
+        customModels: blueprint.customModels,
+      });
       const mcpAsgiStub = enableMcp
         ? generateMcpUnifiedAsgiStub({ deploymentId })
         : '';
@@ -48,10 +78,56 @@ export class ModalAppDeployer {
         this.selectGPU(blueprint.deploymentConfig?.gpuMemoryGB || 24),
         gpuCount,
       );
+      const aptPackages = formatAptPackages(blueprint.systemRequirements?.systemPackages);
+      const entrypoint = blueprint.deploymentConfig?.entrypoint || 'main.py';
+      const userLoaderCode = includeUserProject
+        ? generateUserCodeLoaderPython({ entrypoint })
+        : '';
+      const userInferenceMethod = includeUserProject
+        ? `\n${generateUserInferencePython('    ')}`
+        : '';
+      const addLocalDirChain = includeUserProject
+        ? `\n    .add_local_dir("project", remote_path="${PROJECT_REMOTE_ROOT}")`
+        : '';
+      const aptInstallChain = aptPackages
+        ? `\n    .apt_install([${aptPackages}])`
+        : '';
 
       // If using cached image, return simplified app that skips pip_install
       if (skipPipInstall && cachedImageRef) {
         logger.info(`Deploying with cached image for ${blueprint.framework?.framework}:${blueprint.framework?.version}`);
+        // Prefer string ctor when no local dir (backward-compatible); with project chain add_local_dir
+        const cachedImageLine = includeUserProject
+          ? `image = (\n    modal.Image.from_id("${cachedImageRef}")${addLocalDirChain}\n)`
+          : `image = modal.Image("${cachedImageRef}")`;
+
+        const cachedLoadBody = includeUserProject
+          ? `        self.user_module = None
+        self.user_runner = None
+        try:
+${userLoaderCode}
+            load_time = time.time() - start_time
+            print(f"✓ Agent ready in {load_time:.2f}s (cached image + user project)")
+        except Exception as user_err:
+            print(f"⚠ User project load failed, using cached scaffold: {user_err}")
+            try:
+                load_time = time.time() - start_time
+                print(f"✓ Agent ready in {load_time:.2f}s (cached image)")
+            except Exception as e:
+                raise RuntimeError(f"Failed to initialize agent: {str(e)}")`
+          : `        try:
+            # Assume model already loaded in cached image
+            load_time = time.time() - start_time
+            print(f"✓ Agent ready in {load_time:.2f}s (cached image)")
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize agent: {str(e)}")`;
+
+        const cachedRunInference = includeUserProject
+          ? `        if getattr(self, "user_runner", None) is not None:
+            return self._run_user_inference(input_text, metadata)
+`
+          : '';
+
         return `
 #!/usr/bin/env python3
 """
@@ -67,16 +143,16 @@ import modal
 
 # Initialize Modal app
 app = modal.App("auraops-${deploymentId}")
-
+${weightVolumePython}
 # Use cached image reference
-image = modal.Image("${cachedImageRef}")
+${cachedImageLine}
 
 # Agent class with persistent load
 @app.cls(
     gpu="${gpuConfig}",
     image=image,
     timeout=300,
-    scaledown_window=60,
+    scaledown_window=60${secretsArg}${volumesArg},
 )
 class AuraOpsAgent:
     """AI Agent for inference using cached image"""
@@ -88,19 +164,16 @@ class AuraOpsAgent:
     compiled_graph = None
     crew = None
     crew_agents = None
+    user_module = None
+    user_runner = None
 
     @modal.enter()
     def load(self):
         """Load model/agent on container startup — lazy imports only"""
         import time
         start_time = time.time()
-        
-        try:
-            # Assume model already loaded in cached image
-            load_time = time.time() - start_time
-            print(f"✓ Agent ready in {load_time:.2f}s (cached image)")
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize agent: {str(e)}")
+${runtimeBootstrap}
+${cachedLoadBody}
 
     @modal.exit()
     def cleanup(self):
@@ -112,6 +185,8 @@ class AuraOpsAgent:
         self.compiled_graph = None
         self.crew = None
         self.crew_agents = None
+        self.user_module = None
+        self.user_runner = None
         print("✓ Agent cleanup complete")
 
 ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
@@ -134,10 +209,10 @@ ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
             }
         except Exception as e:
             raise RuntimeError(f"Inference failed: {str(e)}")
-
+${userInferenceMethod}
     def _run_inference(self, input_text: str, metadata: dict) -> str:
         """Execute inference based on framework — uses models loaded in load()"""
-        framework = "${blueprint.framework.framework}"
+${cachedRunInference}        framework = "${blueprint.framework.framework}"
         
         if framework == "langchain":
             if self.agent is None:
@@ -199,13 +274,53 @@ if __name__ == "__main__":
 `;
       }
 
-      const dependencies = this.formatDependencies(blueprint.dependencyLock);
+      const extraPip: string[] = [];
+      if (
+        needsBoto3ForModels(blueprint.customModels) &&
+        !(blueprint.dependencyLock && 'boto3' in blueprint.dependencyLock)
+      ) {
+        extraPip.push('boto3');
+      }
+      const dependencies = this.formatDependencies(blueprint.dependencyLock, extraPip);
       const loaderCode = this.generateFrameworkLoader(
         blueprint.framework?.framework || 'langchain',
         blueprint.customModels,
         blueprint.framework?.langGraph,
         blueprint.framework?.crewAI,
       );
+
+      const imageBuild = `image = (
+    modal.Image.debian_slim()${aptInstallChain}
+    .pip_install([${dependencies}])${addLocalDirChain}
+)`;
+
+      const loadBody = includeUserProject
+        ? `        self.user_module = None
+        self.user_runner = None
+        try:
+${userLoaderCode}
+            load_time = time.time() - start_time
+            print(f"✓ Agent loaded in {load_time:.2f}s (user project)")
+        except Exception as user_err:
+            print(f"⚠ User project load failed, falling back to framework scaffold: {user_err}")
+            try:
+${loaderCode}
+                load_time = time.time() - start_time
+                print(f"✓ Agent loaded in {load_time:.2f}s (framework fallback)")
+            except Exception as e:
+                raise RuntimeError(f"Failed to load agent: {str(e)}")`
+        : `        try:
+${loaderCode}
+            load_time = time.time() - start_time
+            print(f"✓ Agent loaded in {load_time:.2f}s")
+        except Exception as e:
+            raise RuntimeError(f"Failed to load agent: {str(e)}")`;
+
+      const runInferencePrefix = includeUserProject
+        ? `        if getattr(self, "user_runner", None) is not None:
+            return self._run_user_inference(input_text, metadata)
+`
+        : '';
 
       return `
 #!/usr/bin/env python3
@@ -222,16 +337,16 @@ import modal
 
 # Initialize Modal app
 app = modal.App("auraops-${deploymentId}")
-
+${weightVolumePython}
 # Build Docker image from dependencies
-image = modal.Image.debian_slim().pip_install([${dependencies}])
+${imageBuild}
 
 # Agent class with persistent load
 @app.cls(
     gpu="${gpuConfig}",
     image=image,
     timeout=300,
-    scaledown_window=60,
+    scaledown_window=60${secretsArg}${volumesArg},
 )
 class AuraOpsAgent:
     """AI Agent for inference"""
@@ -241,19 +356,18 @@ class AuraOpsAgent:
     tokenizer = None
     graph = None
     compiled_graph = None
+    crew = None
+    crew_agents = None
+    user_module = None
+    user_runner = None
 
     @modal.enter()
     def load(self):
         """Load model/agent on container startup — lazy imports only"""
         import time
         start_time = time.time()
-        
-        try:
-${loaderCode}
-            load_time = time.time() - start_time
-            print(f"✓ Agent loaded in {load_time:.2f}s")
-        except Exception as e:
-            raise RuntimeError(f"Failed to load agent: {str(e)}")
+${runtimeBootstrap}
+${loadBody}
 
     @modal.exit()
     def cleanup(self):
@@ -263,6 +377,10 @@ ${loaderCode}
         self.tokenizer = None
         self.graph = None
         self.compiled_graph = None
+        self.crew = None
+        self.crew_agents = None
+        self.user_module = None
+        self.user_runner = None
         print("✓ Agent cleanup complete")
 
 ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
@@ -284,10 +402,10 @@ ${endpointDecorator}    def endpoint(self, request: dict) -> dict:
             }
         except Exception as e:
             raise RuntimeError(f"Inference failed: {str(e)}")
-
+${userInferenceMethod}
     def _run_inference(self, input_text: str, metadata: dict) -> str:
         """Execute inference based on framework — uses models loaded in load()"""
-        framework = "${blueprint.framework.framework}"
+${runInferencePrefix}        framework = "${blueprint.framework.framework}"
         
         if framework == "langchain":
             if self.agent is None:
@@ -363,8 +481,9 @@ if __name__ == "__main__":
    */
   private static formatDependencies(
     dependencyLock?: Record<string, string>,
+    extraPackages: string[] = [],
   ): string {
-    const required = ['fastapi[standard]'];
+    const required = ['fastapi[standard]', ...extraPackages];
 
     const userDeps = dependencyLock
       ? Object.entries(dependencyLock).map(
@@ -568,19 +687,48 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
   }
 
   /**
-   * Write modal_app.py to temporary directory with unique name
+   * Prepare deploy workspace: write modal_app + optionally copy user project.
+   */
+  static async prepareDeployWorkspace(opts: {
+    content: string;
+    deploymentId: string;
+    projectPath?: string;
+  }): Promise<{ appPath: string; workspaceDir: string }> {
+    const { content, deploymentId, projectPath } = opts;
+    const workspaceDir = path.join('/tmp', `auraops-${deploymentId}`);
+    await fs.mkdir(workspaceDir, { recursive: true });
+
+    const appPath = path.join(workspaceDir, `modal_app_${deploymentId}.py`);
+    await fs.writeFile(appPath, content, 'utf-8');
+    logger.info(`Modal app written to ${appPath}`);
+
+    if (projectPath) {
+      const destProject = path.join(workspaceDir, 'project');
+      await fs.rm(destProject, { recursive: true, force: true });
+      await fs.cp(path.resolve(projectPath), destProject, {
+        recursive: true,
+        filter: projectCopyFilter,
+      });
+      logger.info(`User project copied to ${destProject} from ${projectPath}`);
+    }
+
+    return { appPath, workspaceDir };
+  }
+
+  /**
+   * Write modal_app.py to temporary directory with unique name.
+   * Optional projectPath copies user code next to the app for Modal add_local_dir.
    */
   static async writeModalApp(
     content: string,
     deploymentId: string,
+    projectPath?: string,
   ): Promise<string> {
-    const tmpDir = path.join('/tmp', `auraops-${deploymentId}`);
-    await fs.mkdir(tmpDir, { recursive: true });
-
-    const appPath = path.join(tmpDir, `modal_app_${deploymentId}.py`);
-    await fs.writeFile(appPath, content, 'utf-8');
-
-    logger.info(`Modal app written to ${appPath}`);
+    const { appPath } = await this.prepareDeployWorkspace({
+      content,
+      deploymentId,
+      projectPath,
+    });
     return appPath;
   }
 
@@ -589,55 +737,60 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
    */
   static async deployApp(appPath: string, deploymentId: string): Promise<string> {
     const start = Date.now();
+    const timeoutMs = config.modal_deploy_timeout_ms ?? 600_000;
+    const timeoutLabel = `${Math.round(timeoutMs / 1000)}s`;
 
     return new Promise((resolve, reject) => {
       let stdout = '';
       let stderr = '';
-      let timedOut = false;
+      let settled = false;
 
-      logger.info(`Deploying Modal app from ${appPath}`);
-
-      // Set 120s timeout
-      const timeout = setTimeout(() => {
-        timedOut = true;
-        proc.kill('SIGTERM');
-        logger.error('Modal deploy timeout after 120s');
-        reject(
-          new DeploymentError('Modal deployment timeout after 120s', {
-            deploymentId,
-            stdout,
-            stderr,
-          }),
-        );
-      }, 120000);
+      logger.info(`Deploying Modal app from ${appPath} (timeout ${timeoutLabel})`);
 
       // Pass Modal auth tokens and inherited env to child process
       const modalCmd = process.env.MODAL_CLI_PATH || 'modal';
       const proc = spawn(modalCmd, ['deploy', appPath], {
-       cwd: path.dirname(appPath),
-       stdio: 'pipe',
-       env: {
-         ...process.env,
+        cwd: path.dirname(appPath),
+        stdio: 'pipe',
+        env: {
+          ...process.env,
           MODAL_TOKEN_ID: config.modal_token_id,
           MODAL_TOKEN_SECRET: config.modal_token_secret,
         },
       });
 
-      proc.stdout!.on('data', (data: Buffer) => {
+      // unref so the timeout alone does not keep the process alive
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        proc.kill('SIGTERM');
+        logger.error(`Modal deploy timeout after ${timeoutLabel}`);
+        reject(
+          new DeploymentError(`Modal deployment timeout after ${timeoutLabel}`, {
+            deploymentId,
+            stdout,
+            stderr,
+            timeoutMs,
+          }),
+        );
+      }, timeoutMs);
+      timeout.unref?.();
+
+      const onStdout = (data: Buffer): void => {
         const chunk = data.toString();
         stdout += chunk;
         logger.debug(`Modal deploy stdout: ${chunk}`);
-      });
-
-      proc.stderr!.on('data', (data: Buffer) => {
+      };
+      const onStderr = (data: Buffer): void => {
         const chunk = data.toString();
         stderr += chunk;
         logger.debug(`Modal deploy stderr: ${chunk}`);
-      });
-
-      proc.on('close', (code: number) => {
-        if (timedOut) return;
-        clearTimeout(timeout);
+      };
+      const onClose = (code: number | null): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
 
         const deployTime = Date.now() - start;
 
@@ -678,11 +831,11 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
         const endpointUrl = urlMatch[0];
         logger.info(`✓ Modal app deployed in ${deployTime}ms: ${endpointUrl}`);
         resolve(endpointUrl);
-      });
-
-      proc.on('error', (error: Error) => {
-        if (timedOut) return;
-        clearTimeout(timeout);
+      };
+      const onError = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
 
         logger.error(`Modal deploy process error: ${error.message}`);
         reject(
@@ -691,7 +844,20 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
             cause: error.message,
           }),
         );
-      });
+      };
+
+      const cleanup = (): void => {
+        clearTimeout(timeout);
+        proc.stdout?.off('data', onStdout);
+        proc.stderr?.off('data', onStderr);
+        proc.off('close', onClose);
+        proc.off('error', onError);
+      };
+
+      proc.stdout?.on('data', onStdout);
+      proc.stderr?.on('data', onStderr);
+      proc.on('close', onClose);
+      proc.on('error', onError);
     });
   }
 
@@ -704,6 +870,7 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
     return new Promise((resolve) => {
       let stdout = '';
       let stderr = '';
+      let settled = false;
 
       const modalCmd = process.env.MODAL_CLI_PATH || 'modal';
       const proc = spawn(modalCmd, ['app', 'logs', `auraops-${deploymentId}`], {
@@ -715,34 +882,49 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
         },
       });
 
-      proc.stdout?.on('data', (data: Buffer) => {
+      const onStdout = (data: Buffer): void => {
         stdout += data.toString();
-      });
-
-      proc.stderr?.on('data', (data: Buffer) => {
+      };
+      const onStderr = (data: Buffer): void => {
         stderr += data.toString();
-      });
+      };
+
+      const timeout = setTimeout(() => {
+        proc.kill('SIGTERM');
+        finish();
+      }, 10_000);
+      timeout.unref?.();
+
+      const cleanup = (): void => {
+        clearTimeout(timeout);
+        proc.stdout?.off('data', onStdout);
+        proc.stderr?.off('data', onStderr);
+        proc.off('close', onClose);
+        proc.off('error', onError);
+      };
 
       const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         logger.info(
           `Fetched Modal app logs for auraops-${deploymentId} in ${Date.now() - start}ms`,
         );
         resolve({ stdout, stderr });
       };
 
-      proc.on('close', () => {
+      const onClose = (): void => {
         finish();
-      });
-
-      proc.on('error', (error: Error) => {
+      };
+      const onError = (error: Error): void => {
         logger.warn(`Modal app logs fetch error: ${error.message}`);
         finish();
-      });
+      };
 
-      setTimeout(() => {
-        proc.kill('SIGTERM');
-        finish();
-      }, 10_000);
+      proc.stdout?.on('data', onStdout);
+      proc.stderr?.on('data', onStderr);
+      proc.on('close', onClose);
+      proc.on('error', onError);
     });
   }
 
@@ -753,6 +935,7 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
     const start = Date.now();
 
     return new Promise((resolve) => {
+      let settled = false;
       logger.info(`Stopping Modal app: auraops-${deploymentId}`);
 
       const modalCmd = process.env.MODAL_CLI_PATH || 'modal';
@@ -765,7 +948,28 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
         },
       });
 
-      proc.on('close', (code: number) => {
+      // Timeout after 30s — unref so it does not keep the process alive alone
+      const timeout = setTimeout(() => {
+        proc.kill();
+        logger.warn(`Modal app stop timeout: auraops-${deploymentId}`);
+        finish();
+      }, 30_000);
+      timeout.unref?.();
+
+      const cleanup = (): void => {
+        clearTimeout(timeout);
+        proc.off('close', onClose);
+        proc.off('error', onError);
+      };
+
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+
+      const onClose = (code: number | null): void => {
         if (code !== 0) {
           logger.warn(`Modal app stop returned code ${code}`);
           // Don't reject - app may already be stopped
@@ -773,21 +977,16 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
 
         const stopTime = Date.now() - start;
         logger.info(`✓ Modal app stopped in ${stopTime}ms: auraops-${deploymentId}`);
-        resolve();
-      });
-
-      proc.on('error', (error: Error) => {
+        finish();
+      };
+      const onError = (error: Error): void => {
         logger.warn(`Modal app stop error: ${error.message}`);
         // Don't reject - best effort
-        resolve();
-      });
+        finish();
+      };
 
-      // Timeout after 30s
-      setTimeout(() => {
-        proc.kill();
-        logger.warn(`Modal app stop timeout: auraops-${deploymentId}`);
-        resolve();
-      }, 30_000);
+      proc.on('close', onClose);
+      proc.on('error', onError);
     });
   }
 }

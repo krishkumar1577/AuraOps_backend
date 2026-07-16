@@ -150,6 +150,14 @@ describe('AzureGPUProvider', () => {
   });
 
   describe('getPrice', () => {
+    const originalEnv = process.env;
+
+    afterEach(() => {
+      process.env = { ...originalEnv };
+      delete process.env.AZURE_PRICE_A10G;
+      delete process.env.AURAOPS_GPU_PRICE_JSON;
+    });
+
     it('should return Azure A10G hourly price for ranking', async () => {
       const mocks = createMockClients();
       const provider = new AzureGPUProvider(mocks);
@@ -158,6 +166,15 @@ describe('AzureGPUProvider', () => {
       const price = await provider.getPrice('A10G');
       expect(price).toBe(AZURE_GPU_HOURLY_PRICES.A10G);
       expect(price).toBeLessThan(3.5);
+    });
+
+    it('should honor AZURE_PRICE_* env override', async () => {
+      process.env.AZURE_PRICE_A10G = '1.11';
+      const mocks = createMockClients();
+      const provider = new AzureGPUProvider(mocks);
+      await provider.connect(validCredentials);
+
+      expect(await provider.getPrice('A10G')).toBe(1.11);
     });
   });
 
