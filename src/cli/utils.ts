@@ -3,17 +3,58 @@ import * as path from 'path';
 import * as readline from 'readline';
 import { AuraOpsError } from '../utils/errors';
 
-const COLORS = {
+/**
+ * Minimal Grok-like CLI palette: muted chrome, bright white type, soft status colors.
+ * Honors NO_COLOR and non-TTY (CI-friendly plain text).
+ */
+const C = {
   reset: '\x1b[0m',
   bold: '\x1b[1m',
   dim: '\x1b[2m',
-  red: '\x1b[31m',
+  // bright white / gray (readable on dark terminals)
+  white: '\x1b[97m',
+  muted: '\x1b[90m',
+  // status
   green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  blue: '\x1b[34m',
-  cyan: '\x1b[36m',
-  white: '\x1b[37m',
+  red: '\x1b[31m',
+  amber: '\x1b[33m',
+  // soft accent (not neon cyan spam)
+  accent: '\x1b[36m',
 };
+
+/** @deprecated internal alias for older references */
+const COLORS = {
+  reset: C.reset,
+  bold: C.bold,
+  dim: C.dim,
+  red: C.red,
+  green: C.green,
+  yellow: C.amber,
+  blue: '\x1b[34m',
+  cyan: C.accent,
+  white: C.white,
+};
+
+function colorEnabled(): boolean {
+  if (process.env.NO_COLOR === '1' || process.env.NO_COLOR === 'true') {
+    return false;
+  }
+  if (process.env.FORCE_COLOR === '0') {
+    return false;
+  }
+  return Boolean(process.stdout.isTTY || process.stderr.isTTY);
+}
+
+function paint(codes: string, text: string): string {
+  if (!colorEnabled()) {
+    return text;
+  }
+  return `${codes}${text}${C.reset}`;
+}
+
+function mark(symbol: string, code: string): string {
+  return paint(code, symbol);
+}
 
 /** True when stdin/stdout are TTYs and CI is not set — safe to prompt interactively. */
 export function isInteractive(): boolean {
@@ -33,10 +74,15 @@ export function isInteractive(): boolean {
 export function promptLine(question: string, options?: { secret?: boolean }): Promise<string> {
   const secret = options?.secret ?? false;
 
+  const styled =
+    question.includes('›') || question.startsWith(' ')
+      ? question
+      : paint(C.muted, '› ') + question;
+
   if (!secret) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     return new Promise((resolve) => {
-      rl.question(question, (answer) => {
+      rl.question(styled, (answer) => {
         rl.close();
         resolve(answer.trim());
       });
@@ -47,7 +93,7 @@ export function promptLine(question: string, options?: { secret?: boolean }): Pr
   return new Promise((resolve, reject) => {
     const stdin = process.stdin;
     const stdout = process.stdout;
-    stdout.write(question);
+    stdout.write(styled);
 
     if (typeof stdin.setRawMode !== 'function') {
       // Fallback: visible prompt
@@ -106,7 +152,8 @@ export function promptLine(question: string, options?: { secret?: boolean }): Pr
 
 export async function promptYesNo(question: string, defaultYes = false): Promise<boolean> {
   const hint = defaultYes ? 'Y/n' : 'y/N';
-  const answer = await promptLine(`${question} (${hint}): `);
+  const q = paint(C.muted, '› ') + question + paint(C.muted, ` (${hint}) `);
+  const answer = await promptLine(q);
   if (!answer) {
     return defaultYes;
   }
@@ -306,37 +353,80 @@ export async function ensureApiToken(token?: string, options?: { offerSave?: boo
   return resolved;
 }
 
+/** Compact brand line for help / major commands. */
+export function brand(version?: string): void {
+  const name = paint(C.bold + C.white, 'auraops');
+  const tag = paint(C.muted, version ? `  v${version}` : '');
+  const tagline = paint(C.muted, '  deploy agents · gpu');
+  process.stdout.write(`\n  ${name}${tag}\n`);
+  process.stdout.write(`${tagline}\n`);
+  divider();
+}
+
+/** Thin horizontal rule (muted). */
+export function divider(width = 36): void {
+  const line = '─'.repeat(Math.max(12, Math.min(width, 56)));
+  process.stdout.write(`  ${paint(C.muted, line)}\n`);
+}
+
 export function success(message: string): void {
-  process.stdout.write(`${COLORS.green}✓${COLORS.reset} ${message}\n`);
+  process.stdout.write(`  ${mark('✓', C.green)}  ${message}\n`);
 }
 
 export function fail(message: string): void {
-  process.stderr.write(`${COLORS.red}✗${COLORS.reset} ${message}\n`);
+  process.stderr.write(`  ${mark('✗', C.red)}  ${message}\n`);
 }
 
 export function info(message: string): void {
-  process.stdout.write(`${COLORS.cyan}ℹ${COLORS.reset} ${message}\n`);
+  process.stdout.write(`  ${mark('·', C.muted)}  ${message}\n`);
 }
 
 export function warn(message: string): void {
-  process.stderr.write(`${COLORS.yellow}⚠${COLORS.reset} ${message}\n`);
+  process.stderr.write(`  ${mark('!', C.amber)}  ${message}\n`);
 }
 
 export function step(message: string, timing?: string): void {
-  const suffix = timing ? ` ${COLORS.dim}[${timing}]${COLORS.reset}` : '';
-  process.stdout.write(`${COLORS.green}✓${COLORS.reset} ${message}${suffix}\n`);
+  const suffix = timing ? paint(C.muted, `  ${timing}`) : '';
+  process.stdout.write(`  ${mark('✓', C.green)}  ${message}${suffix}\n`);
 }
 
+/**
+ * Command title block — clean, not loud.
+ * Example:
+ *   init
+ *   ────
+ */
 export function header(title: string): void {
-  process.stdout.write(`\n${COLORS.bold}${COLORS.cyan}${title}${COLORS.reset}\n`);
+  const clean = title.replace(/^AuraOps\s+/i, '').trim() || title;
+  process.stdout.write('\n');
+  process.stdout.write(`  ${paint(C.bold + C.white, clean)}\n`);
+  divider(Math.min(40, Math.max(16, clean.length + 4)));
 }
 
 export function label(key: string, value: string): void {
-  process.stdout.write(`  ${COLORS.dim}${key}:${COLORS.reset} ${value}\n`);
+  const k = paint(C.muted, key.padEnd(14));
+  process.stdout.write(`  ${k}  ${paint(C.white, value)}\n`);
+}
+
+/** Key facts after a successful run. */
+export function summary(rows: Array<[string, string]>): void {
+  blank();
+  process.stdout.write(`  ${paint(C.dim, 'summary')}\n`);
+  for (const [key, value] of rows) {
+    label(key, value);
+  }
 }
 
 export function blank(): void {
   process.stdout.write('\n');
+}
+
+/** Done line with optional total time. */
+export function done(message = 'done', timing?: string): void {
+  blank();
+  const t = timing ? paint(C.muted, `  ·  ${timing}`) : '';
+  process.stdout.write(`  ${mark('✓', C.green)}  ${paint(C.bold, message)}${t}\n`);
+  blank();
 }
 
 export function formatMs(ms: number): string {

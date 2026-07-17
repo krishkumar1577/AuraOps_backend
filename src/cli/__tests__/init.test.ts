@@ -61,7 +61,7 @@ describe('CLI: auraops init', () => {
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Manifest parsed'));
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Framework detected'));
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Blueprint generated'));
-    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Init complete'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('init complete'));
   });
 
   it('should parse langchain project as agentic', async () => {

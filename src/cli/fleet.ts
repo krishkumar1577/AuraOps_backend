@@ -76,7 +76,7 @@ export async function runFleetDeploy(options: FleetDeployOptions): Promise<void>
   const crewDir = path.dirname(fleetPath);
   const concurrency = options.concurrency ?? DEFAULT_FLEET_CONCURRENCY;
 
-  ui.header('AuraOps Fleet Deploy (parallel)');
+  ui.header('fleet');
 
   const parser = new CrewParser();
   const crew = await parser.parse(fleetPath);

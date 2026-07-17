@@ -20,8 +20,7 @@ async function runStatus(deploymentId: string, options: { token?: string }): Pro
   const apiUrl = ui.resolveApiUrl();
   const headers = await ui.resolveAuthHeaders(options.token);
 
-  ui.header('AuraOps Status');
-  ui.blank();
+  ui.header('status');
 
   let result: StatusResult;
   try {

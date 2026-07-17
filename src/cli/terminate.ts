@@ -47,7 +47,7 @@ export const terminateCommand = new Command('terminate')
 
       const result = await response.json();
 
-      ui.success(`✓ Deployment terminated in ${duration}ms`);
+      ui.done('terminated', ui.formatMs(duration));
       ui.label('Deployment ID', String((result as Record<string, unknown>).deploymentId));
       ui.label('Status', String((result as Record<string, unknown>).status));
 

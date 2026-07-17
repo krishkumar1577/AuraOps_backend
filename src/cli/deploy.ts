@@ -103,11 +103,11 @@ function printDeploySummary(options: {
     ui.warn('No live endpoint returned — check Modal credentials');
   }
 
-  ui.success(`Deployed in ${ui.formatMs(options.totalTimeMs)}`);
+  ui.done('deployed', ui.formatMs(options.totalTimeMs));
   if (options.mode === 'server') {
-    ui.info(`Check status: auraops status ${options.deploymentId}`);
+    ui.info(`status → auraops status ${options.deploymentId}`);
   } else {
-    ui.info(`Deployment saved to .auraops/last-deployment.json`);
+    ui.info('saved → .auraops/last-deployment.json');
   }
 }
 
@@ -304,7 +304,7 @@ async function runServerDeploy(
 async function runDeploy(options: DeployOptions, gpusSource?: OptionValueSource): Promise<void> {
   const start = Date.now();
 
-  ui.header('AuraOps Deploy');
+  ui.header('deploy');
 
   const blueprintPath = options.blueprint
     ? path.resolve(options.blueprint)

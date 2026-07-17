@@ -157,7 +157,7 @@ describe('CLI: auraops deploy', () => {
     );
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Blueprint validated'));
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Agent live'));
-    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Deployed'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('deployed'));
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('Endpoint'));
   });
 

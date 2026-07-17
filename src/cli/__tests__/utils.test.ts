@@ -46,6 +46,18 @@ describe('CLI Utils', () => {
       expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('careful'));
     });
 
+    it('should write brand and divider', () => {
+      utils.brand('0.1.0');
+      expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('auraops'));
+      expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('─'));
+    });
+
+    it('should write done with timing', () => {
+      utils.done('finished', '1.2s');
+      expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('finished'));
+      expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('1.2s'));
+    });
+
     it('should write step with timing', () => {
       utils.step('parsed', '42ms');
       expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('parsed'));

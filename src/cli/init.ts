@@ -82,8 +82,8 @@ export async function runInit(projectPath: string, options: InitOptions): Promis
   const start = Date.now();
   const resolvedPath = path.resolve(projectPath);
 
-  ui.header('AuraOps Init');
-  ui.info(`Scanning project: ${resolvedPath}`);
+  ui.header('init');
+  ui.info(resolvedPath);
   ui.blank();
 
   try {
@@ -171,7 +171,7 @@ export async function runInit(projectPath: string, options: InitOptions): Promis
     ui.info(`  ${entryPointWarning}`);
   }
 
-  ui.success(`Init complete in ${ui.formatMs(Date.now() - start)}`);
+  ui.done('init complete', ui.formatMs(Date.now() - start));
 }
 
 export const initCommand = new Command('init')
