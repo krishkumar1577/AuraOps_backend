@@ -2,18 +2,26 @@ import { MongoClient, Db, Collection, ObjectId } from 'mongodb';
 import { ConflictError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import config from '../../utils/config';
+import { FREE_SIGNUP_CREDITS } from '../billing/plans';
 
 export interface UserDocument {
   _id: ObjectId;
   email: string;
   passwordHash: string;
   createdAt: Date;
+  /** Hosted-deploy credits (local CLI deploys free) */
+  credits?: number;
+  plan?: 'free' | 'payg';
+  creditsPurchased?: number;
+  creditsSpent?: number;
 }
 
 export interface UserPublic {
   id: string;
   email: string;
   createdAt: Date;
+  credits?: number;
+  plan?: 'free' | 'payg';
 }
 
 let client: MongoClient | null = null;
@@ -44,12 +52,18 @@ export async function createUser(
       email: email.toLowerCase().trim(),
       passwordHash,
       createdAt: now,
+      credits: FREE_SIGNUP_CREDITS,
+      plan: 'free',
+      creditsPurchased: 0,
+      creditsSpent: 0,
     });
 
     return {
       id: result.insertedId.toHexString(),
       email: email.toLowerCase().trim(),
       createdAt: now,
+      credits: FREE_SIGNUP_CREDITS,
+      plan: 'free',
     };
   } catch (error: unknown) {
     if (

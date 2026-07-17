@@ -27,6 +27,8 @@ import {
   serializeClaudeDesktopConfig,
   type ClaudeDesktopConfig,
 } from '../../services/mcp/mcpCardGenerator';
+import { creditsForHostedDeploy } from '../../services/billing/plans';
+import { spendCredits } from '../../services/billing/billingRepository';
 
 // Zod schemas for request validation
 const GPURequirementsSchema = z.object({
@@ -163,6 +165,45 @@ export async function deploymentRoutes(
             });
           }
           throw error;
+        }
+
+        // Pay-as-you-go: hosted deploys consume credits (local CLI uses user Modal — free)
+        const userPayload = request.user as { sub?: string; email?: string } | undefined;
+        const userId = userPayload?.sub;
+        const creditCost = creditsForHostedDeploy(validatedData.gpuCount ?? 1);
+
+        if (config.billing_enforce) {
+          if (!userId) {
+            return reply.code(401).send({
+              success: false,
+              error: 'Unauthorized — login required for hosted deploys',
+            });
+          }
+          try {
+            const spent = await spendCredits(userId, creditCost);
+            if (!spent.ok) {
+              return reply.code(402).send({
+                success: false,
+                error: 'Insufficient credits for hosted deploy',
+                code: 'INSUFFICIENT_CREDITS',
+                required: creditCost,
+                remaining: spent.remaining,
+                hint:
+                  'Buy credits via POST /api/v1/billing/checkout (Razorpay), or use free local deploy: auraops deploy (your Modal tokens).',
+              });
+            }
+            logger.info(
+              `Billing: user ${userId} spent ${creditCost} credits (${spent.remaining} left) for hosted deploy`,
+            );
+          } catch (billingErr) {
+            logger.error(
+              `Billing check failed: ${billingErr instanceof Error ? billingErr.message : String(billingErr)}`,
+            );
+            return reply.code(503).send({
+              success: false,
+              error: 'Billing service unavailable — try again or use local deploy',
+            });
+          }
         }
 
         const {

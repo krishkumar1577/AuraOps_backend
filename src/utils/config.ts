@@ -36,6 +36,17 @@ const EnvSchema = z.object({
   AZURE_STORAGE_ACCOUNT: z.string().default(''),
   AZURE_STORAGE_CONTAINER: z.string().default('aura-weights'),
   LOOPS_API_KEY: z.string().default(''),
+  /** Razorpay (India) — pay-as-you-go credits for hosted deploys */
+  RAZORPAY_KEY_ID: z.string().default(''),
+  RAZORPAY_KEY_SECRET: z.string().default(''),
+  /**
+   * If false, hosted deploys are blocked when user has 0 credits.
+   * Set true only for emergency owner testing (still requires auth).
+   */
+  BILLING_ENFORCE: z
+    .enum(['true', 'false', '1', '0', ''])
+    .default('true')
+    .transform((v) => v !== 'false' && v !== '0'),
 });
 
 const env = EnvSchema.parse({
@@ -61,6 +72,9 @@ const env = EnvSchema.parse({
   MAX_REQUEST_BODY_BYTES: process.env.MAX_REQUEST_BODY_BYTES,
   AWS_ENDPOINT_URL: process.env.AWS_ENDPOINT_URL,
   LOOPS_API_KEY: process.env.LOOPS_API_KEY,
+  RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID,
+  RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET,
+  BILLING_ENFORCE: process.env.BILLING_ENFORCE,
   AZURE_SUBSCRIPTION_ID: process.env.AZURE_SUBSCRIPTION_ID,
   AZURE_TENANT_ID: process.env.AZURE_TENANT_ID,
   AZURE_CLIENT_ID: process.env.AZURE_CLIENT_ID,
@@ -100,6 +114,9 @@ export const config = {
   isProd: env.NODE_ENV === 'production',
   aws_endpoint_url: env.AWS_ENDPOINT_URL,
   loops_api_key: env.LOOPS_API_KEY,
+  razorpay_key_id: env.RAZORPAY_KEY_ID,
+  razorpay_key_secret: env.RAZORPAY_KEY_SECRET,
+  billing_enforce: env.BILLING_ENFORCE,
   azure_subscription_id: env.AZURE_SUBSCRIPTION_ID,
   azure_tenant_id: env.AZURE_TENANT_ID,
   azure_client_id: env.AZURE_CLIENT_ID,

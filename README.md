@@ -230,6 +230,45 @@ Deep dive: [`docs/architecture/code-map.md`](docs/architecture/code-map.md) · C
 
 Default production API: `https://auraops-backend-s2gw.onrender.com` (override with `AURAOPS_API_URL`).
 
+### Billing (Razorpay pay-as-you-go)
+
+| Path | Cost |
+|------|------|
+| `auraops deploy` (local, **your** Modal tokens) | **Free** — you pay Modal, not us |
+| `auraops deploy --server` (platform GPU on our Modal) | **Credits** — 10 credits / GPU |
+
+| Pack | Credits | Price (INR) |
+|------|---------|-------------|
+| Starter | 50 | ₹499 |
+| Builder | 250 | ₹1,999 |
+| Scale | 1,000 | ₹6,999 |
+
+New accounts get a small free trial (5 credits). Buy more via Razorpay:
+
+```bash
+# public
+curl https://YOUR_API/api/v1/billing/plans
+
+# after login JWT
+curl -H "Authorization: Bearer $TOKEN" https://YOUR_API/api/v1/billing/me
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"packId":"starter"}' https://YOUR_API/api/v1/billing/checkout
+# open Razorpay Checkout with response.checkout, then:
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"razorpay_order_id":"...","razorpay_payment_id":"...","razorpay_signature":"..."}' \
+  https://YOUR_API/api/v1/billing/verify
+```
+
+Set on server: `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `BILLING_ENFORCE=true`.
+
+For the marketing site checkout (`https://auraops.vercel.app`), set:
+
+```bash
+CORS_ORIGIN=https://auraops.vercel.app
+```
+
+(The API also allows that origin by default in production CORS.)
+
 ---
 
 ## Requirements

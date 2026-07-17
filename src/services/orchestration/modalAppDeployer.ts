@@ -34,6 +34,16 @@ export interface ModalDeployConfig {
   secretNames?: string[];
 }
 
+/** Re-indent a multi-line Python snippet (preserves blank lines). */
+function reindentPython(code: string, extraSpaces: number): string {
+  if (!extraSpaces) return code;
+  const pad = ' '.repeat(extraSpaces);
+  return code
+    .split('\n')
+    .map((line) => (line.trim().length === 0 ? line : pad + line))
+    .join('\n');
+}
+
 /**
  * Generates a persistent Modal App that accepts HTTP POST requests
  * for AI agent inference with a live HTTPS endpoint.
@@ -294,6 +304,9 @@ if __name__ == "__main__":
     .pip_install([${dependencies}])${addLocalDirChain}
 )`;
 
+      // Nested under `except: try:` needs +4 spaces vs top-level load try body
+      const nestedFallbackLoader = reindentPython(loaderCode, 4);
+
       const loadBody = includeUserProject
         ? `        self.user_module = None
         self.user_runner = None
@@ -304,7 +317,7 @@ ${userLoaderCode}
         except Exception as user_err:
             print(f"⚠ User project load failed, falling back to framework scaffold: {user_err}")
             try:
-${loaderCode}
+${nestedFallbackLoader}
                 load_time = time.time() - start_time
                 print(f"✓ Agent loaded in {load_time:.2f}s (framework fallback)")
             except Exception as e:
@@ -811,9 +824,13 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
         logger.info(`Modal deploy full stdout: ${stdout}`);
         logger.info(`Modal deploy full stderr: ${stderr}`);
 
-        // Modal CLI may print the endpoint URL to stdout OR stderr
+        // Modal CLI may print the endpoint URL to stdout OR stderr.
+        // Rich/TTY output often wraps long URLs across lines — collapse whitespace first.
         const combined = stdout + '\n' + stderr;
-        const urlMatch = combined.match(/https:\/\/[^\s]*\.modal\.run[^\s]*/);
+        const flattened = combined.replace(/[ \t]*\n[ \t]*/g, '');
+        const urlMatch =
+          flattened.match(/https:\/\/[a-zA-Z0-9._-]+\.modal\.run[^\s"'<>]*/i) ||
+          combined.match(/https:\/\/[^\s]*\.modal\.run[^\s]*/);
         if (!urlMatch) {
           logger.warn(
             `Could not find HTTPS URL in Modal output. Combined output:\n${combined}`,
@@ -828,7 +845,7 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
           return;
         }
 
-        const endpointUrl = urlMatch[0];
+        const endpointUrl = urlMatch[0].replace(/\s+/g, '');
         logger.info(`✓ Modal app deployed in ${deployTime}ms: ${endpointUrl}`);
         resolve(endpointUrl);
       };

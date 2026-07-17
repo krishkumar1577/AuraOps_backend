@@ -7,6 +7,7 @@ import { blueprintRoutes } from './api/routes/blueprint.routes';
 import deploymentRoutes from './api/routes/deployment.routes';
 import { registerSWRRoutes } from './api/routes/swr.routes';
 import { authRoutes } from './api/routes/auth.routes';
+import { billingRoutes } from './api/routes/billing.routes';
 import { createDefaultOrchestrator } from './services/orchestration/defaultOrchestrator';
 import authPlugin from './plugins/auth';
 import { logger } from './utils/logger';
@@ -41,9 +42,29 @@ export async function createApp(): Promise<FastifyInstance> {
   });
 
   await fastify.register(helmet, { global: true });
+  // Comma-separated CORS_ORIGIN in prod; always allow landing + common local Vite ports.
+  const defaultProdOrigins = [
+    'https://auraops.vercel.app',
+    'https://auraops.dev',
+    'https://www.auraops.dev',
+  ];
+  const configuredOrigins = (config.cors_origin || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+  const prodOrigins = configuredOrigins.length
+    ? [...new Set([...configuredOrigins, ...defaultProdOrigins])]
+    : defaultProdOrigins;
+
   await fastify.register(cors, {
     origin: config.isProd
-      ? (config.cors_origin || 'https://auraops.dev')
+      ? (origin, cb) => {
+          if (!origin || prodOrigins.includes(origin)) {
+            cb(null, true);
+            return;
+          }
+          cb(null, false);
+        }
       : true,
     credentials: true,
   });
@@ -55,21 +76,28 @@ export async function createApp(): Promise<FastifyInstance> {
   await fastify.register(authPlugin);
 
   fastify.addHook('onRequest', async (request) => {
+    // Normalize path (strip query + trailing slash except root)
+    let pathOnly = request.url.split('?')[0] || '/';
+    if (pathOnly.length > 1 && pathOnly.endsWith('/')) {
+      pathOnly = pathOnly.slice(0, -1);
+    }
     const isPublicRoute =
-      request.url === '/' ||
-      request.url === '/health' ||
-      request.url.startsWith('/api/v1/auth/') ||
-      request.url.startsWith('/.well-known/mcp/');
+      pathOnly === '/' ||
+      pathOnly === '/health' ||
+      pathOnly.startsWith('/api/v1/auth/') ||
+      pathOnly === '/api/v1/billing/plans' ||
+      pathOnly.startsWith('/.well-known/mcp/');
     if (isPublicRoute) {
       return;
     }
 
-    if (request.url.startsWith('/api/v1')) {
+    if (pathOnly.startsWith('/api/v1')) {
       await request.jwtVerify();
     }
   });
 
   fastify.register(authRoutes);
+  fastify.register(billingRoutes);
   fastify.register(blueprintRoutes);
   fastify.register(registerSWRRoutes);
   const orchestrator = createDefaultOrchestrator(config.redis_url);
@@ -90,6 +118,10 @@ export async function createApp(): Promise<FastifyInstance> {
         health: '/health',
         register: 'POST /api/v1/auth/register',
         login: 'POST /api/v1/auth/login',
+        billingPlans: 'GET /api/v1/billing/plans',
+        billingMe: 'GET /api/v1/billing/me',
+        billingCheckout: 'POST /api/v1/billing/checkout',
+        billingVerify: 'POST /api/v1/billing/verify',
         blueprintGenerate: 'POST /api/v1/blueprint/generate',
         blueprintGet: 'GET /api/v1/blueprint/:blueprintId',
         weightsListAll: 'GET /api/v1/weights',

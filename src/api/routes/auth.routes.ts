@@ -55,7 +55,12 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         return reply.code(201).send({
           success: true,
           token,
-          user: { id: user.id, email: user.email },
+          user: {
+            id: user.id,
+            email: user.email,
+            credits: user.credits,
+            plan: user.plan,
+          },
         });
       } catch (error) {
         if (error instanceof z.ZodError) {
@@ -115,10 +120,20 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
         logger.info(`User logged in (${Date.now() - start}ms): ${user.email}`);
 
+        const { ensureUserBillingDefaults } = await import(
+          '../../services/billing/billingRepository'
+        );
+        const billing = await ensureUserBillingDefaults(user._id.toHexString());
+
         return reply.code(200).send({
           success: true,
           token,
-          user: { id: user._id.toHexString(), email: user.email },
+          user: {
+            id: user._id.toHexString(),
+            email: user.email,
+            credits: billing.credits,
+            plan: billing.plan,
+          },
         });
       } catch (error) {
         if (error instanceof z.ZodError) {
