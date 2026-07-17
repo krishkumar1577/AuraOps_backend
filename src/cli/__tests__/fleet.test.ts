@@ -102,6 +102,50 @@ tasks:
 
     expect(mockedAxios.post).toHaveBeenCalledTimes(2);
     expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('test-crew'));
+    expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('parallel'));
+  });
+
+  it('should respect concurrency bound while deploying in parallel', async () => {
+    await fs.mkdir(path.join(tmpDir, '.auraops'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, '.auraops', 'blueprint.json'),
+      JSON.stringify(sampleBlueprint),
+    );
+
+    const crewYaml = `
+name: parallel-crew
+agents:
+  - name: a
+  - name: b
+  - name: c
+  - name: d
+tasks:
+  - description: t1
+    agent: a
+`;
+    const crewPath = path.join(tmpDir, 'crew.yaml');
+    await fs.writeFile(crewPath, crewYaml);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mockedAxios.post.mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise<void>((r) => setTimeout(r, 40));
+      inFlight -= 1;
+      return {
+        data: {
+          deploymentId: `dep-${maxInFlight}`,
+          endpoint_url: 'https://example.modal.run',
+        },
+      };
+    });
+
+    await runFleetDeploy({ fleet: crewPath, concurrency: 2 });
+
+    expect(mockedAxios.post).toHaveBeenCalledTimes(4);
+    expect(maxInFlight).toBeLessThanOrEqual(2);
+    expect(maxInFlight).toBeGreaterThanOrEqual(1);
   });
 
   it('should parse fleet command with crew file argument', async () => {

@@ -12,6 +12,7 @@ import {
   shouldFallbackToAzure,
   type PersistentDeployProvider,
 } from './deployProviderFallback';
+import { mapPool } from './parallel';
 
 const DEPLOYMENT_STATE_PREFIX = 'orchestration:deployment:';
 const ACTIVE_DEPLOYMENTS_KEY = 'orchestration:active-deployments';
@@ -19,7 +20,6 @@ const DEPLOYMENT_RECORD_PREFIX = 'deployment:';
 const DEPLOYMENT_RECORDS_KEY = 'deployments:all';
 const HEALTH_CHECK_TIMEOUT_MS = 60000;
 const DEPLOYMENT_TIMEOUT_MS = 300000;
-const WORKER_ACQUISITION_TIMEOUT_MS = 60000;
 
 export interface GPUProvider {
   name: string;
@@ -129,37 +129,48 @@ export class Orchestrator {
 
   async acquireWorker(requirements: WorkerRequirements): Promise<WorkerInfo> {
     const start = Date.now();
-    const acquireTimeout = Date.now() + WORKER_ACQUISITION_TIMEOUT_MS;
 
     try {
       await this.ensureConnected();
 
-      logger.info(`Acquiring worker: framework=${requirements.framework}, python=${requirements.pythonVersion}, minGPU=${requirements.minGPUMemory}GB`);
+      logger.info(
+        `Acquiring worker (parallel): framework=${requirements.framework}, python=${requirements.pythonVersion}, minGPU=${requirements.minGPUMemory}GB`,
+      );
 
-      let bestWorker: WorkerInfo | null = null;
+      // Query all providers in parallel; pick highest available GPU memory.
+      const settled = await Promise.all(
+        this.providers.map(async (provider) => {
+          try {
+            return await provider.acquireWorker(requirements);
+          } catch {
+            return null;
+          }
+        }),
+      );
 
-      for (const provider of this.providers) {
-        if (Date.now() > acquireTimeout) {
-          throw new DeploymentError('Worker acquisition timeout exceeded', {
-            timeout: WORKER_ACQUISITION_TIMEOUT_MS,
-          });
-        }
-
-        const worker = await provider.acquireWorker(requirements);
-        if (!worker) {
-          continue;
-        }
-
-        if (!bestWorker || worker.availableGPUMemory > bestWorker.availableGPUMemory) {
-          bestWorker = worker;
-        }
-      }
-
-      if (!bestWorker) {
+      const workers = settled.filter((w): w is WorkerInfo => w != null);
+      if (workers.length === 0) {
         throw new DeploymentError('No available workers matching requirements', {
           requirements,
         });
       }
+
+      workers.sort((a, b) => b.availableGPUMemory - a.availableGPUMemory);
+      const bestWorker = workers[0];
+
+      // Release over-acquired workers from parallel probe.
+      await Promise.all(
+        workers.slice(1).map(async (extra) => {
+          for (const provider of this.providers) {
+            try {
+              await provider.releaseWorker(extra.workerId);
+              return;
+            } catch {
+              continue;
+            }
+          }
+        }),
+      );
 
       logger.info(`✓ Worker acquired in ${Date.now() - start}ms: ${bestWorker.workerId}`);
       return bestWorker;
@@ -431,21 +442,26 @@ export class Orchestrator {
     try {
       await this.ensureConnected();
       const agentIds = await this.redisClient.sMembers(ACTIVE_DEPLOYMENTS_KEY);
-      
-      for (const agentId of agentIds) {
+
+      const outcomes = await mapPool(agentIds, 8, async (agentId) => {
         try {
           const status = await this.getDeploymentStatus(agentId);
           const idleTime = Date.now() - status.lastActivityAt;
 
           if (idleTime > idleThresholdMs) {
-            logger.info(`Scale-to-Zero: Terminating idle agent ${agentId} (Idle for ${Math.round(idleTime / 1000)}s)`);
+            logger.info(
+              `Scale-to-Zero: Terminating idle agent ${agentId} (Idle for ${Math.round(idleTime / 1000)}s)`,
+            );
             await this.terminateAgent(agentId);
-            terminatedCount++;
+            return 1;
           }
+          return 0;
         } catch (error) {
           logger.error(`Failed to cleanup agent ${agentId}:`, error);
+          return 0;
         }
-      }
+      });
+      terminatedCount = outcomes.reduce<number>((sum, n) => sum + n, 0);
 
       if (terminatedCount > 0) {
         logger.info(`✓ Scale-to-Zero: Terminated ${terminatedCount} idle agents in ${Date.now() - start}ms`);
@@ -464,17 +480,14 @@ export class Orchestrator {
       await this.ensureConnected();
 
       const agentIds = await this.redisClient.sMembers(ACTIVE_DEPLOYMENTS_KEY);
-      const deployments: DeploymentStatus[] = [];
-
-      for (const agentId of agentIds) {
+      const settled = await mapPool(agentIds, 16, async (agentId) => {
         try {
-          const status = await this.getDeploymentStatus(agentId);
-          deployments.push(status);
+          return await this.getDeploymentStatus(agentId);
         } catch {
-          // Skip deployments that can't be loaded
-          continue;
+          return null;
         }
-      }
+      });
+      const deployments = settled.filter((d): d is DeploymentStatus => d != null);
 
       logger.info(`✓ Listed ${deployments.length} deployments in ${Date.now() - start}ms`);
       return deployments;

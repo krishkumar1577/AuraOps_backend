@@ -8,6 +8,10 @@ export type {
   RedisClient,
 } from './orchestrator';
 
+export { mapPool, allSettledPool, firstNonNull } from './parallel';
+export { ProviderRegistry } from './providerRegistry';
+export type { ProviderQuote, PriceSource } from './providerRegistry';
+
 export { DeploymentLogStore, DeploymentLogEntrySchema } from './deploymentLogStore';
 export type { DeploymentLogEntry } from './deploymentLogStore';
 

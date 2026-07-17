@@ -1,6 +1,7 @@
 import { logger } from '../../utils/logger';
 import type { GPUProvider, WorkerRequirements, WorkerInfo } from './orchestrator';
 import { PROVIDER_DEFAULT_HOURLY_PRICES } from './deployProviderFallback';
+import { mapPool } from './parallel';
 
 /** How the hourly quote was obtained for ranking. */
 export type PriceSource = 'live-list' | 'getPrice' | 'default-map';
@@ -42,10 +43,13 @@ export class ProviderRegistry {
 
   /**
    * Acquire worker from the named provider, or cheapest available when provider is 'auto'.
+   * Ranking quotes run in parallel. Acquisition tries providers cheapest-first sequentially
+   * by default; set race=true to race top providers in parallel (faster, may briefly over-acquire).
    */
   async acquireWorker(
     requirements: WorkerRequirements,
     preferredProvider?: string,
+    options?: { race?: boolean; raceTopN?: number },
   ): Promise<WorkerInfo | null> {
     const start = Date.now();
 
@@ -59,6 +63,46 @@ export class ProviderRegistry {
     }
 
     const quotes = await this.rankProviders(requirements);
+
+    if (options?.race) {
+      const topN = Math.max(1, Math.min(options.raceTopN ?? 3, quotes.length));
+      const contenders = quotes.slice(0, topN);
+      // Fire top-N acquires in parallel; keep cheapest success (contenders already sorted).
+      const settled = await Promise.all(
+        contenders.map(async (quote) => {
+          try {
+            const worker = await quote.provider.acquireWorker(requirements);
+            return worker ? { quote, worker } : null;
+          } catch {
+            return null;
+          }
+        }),
+      );
+
+      const successes = settled.filter(
+        (s): s is { quote: ProviderQuote; worker: WorkerInfo } => s != null,
+      );
+      if (successes.length === 0) {
+        return null;
+      }
+
+      const winner = successes[0];
+      await Promise.all(
+        successes.slice(1).map(async ({ quote, worker }) => {
+          try {
+            await quote.provider.releaseWorker(worker.workerId);
+          } catch {
+            // best-effort release of parallel over-acquire
+          }
+        }),
+      );
+
+      logger.info(
+        `✓ Provider registry parallel-acquire ${winner.quote.name} (${winner.quote.gpuType}, $${winner.quote.pricePerHour}/hr) in ${Date.now() - start}ms`,
+      );
+      return winner.worker;
+    }
+
     for (const quote of quotes) {
       const worker = await quote.provider.acquireWorker(requirements);
       if (worker) {
@@ -73,21 +117,20 @@ export class ProviderRegistry {
   }
 
   async rankProviders(requirements: WorkerRequirements): Promise<ProviderQuote[]> {
-    const quotes: ProviderQuote[] = [];
-
-    for (const provider of this.providers) {
+    // Parallel price discovery across all providers (was sequential).
+    const quotes = await mapPool(this.providers, this.providers.length, async (provider) => {
       const quote = await this.estimateQuote(provider, requirements.minGPUMemory);
-      quotes.push({
+      logger.info(
+        `Provider quote: ${provider.name} ${quote.gpuType} $${quote.pricePerHour}/hr source=${quote.priceSource}`,
+      );
+      return {
         provider,
         name: provider.name,
         pricePerHour: quote.pricePerHour,
         gpuType: quote.gpuType,
         priceSource: quote.priceSource,
-      });
-      logger.info(
-        `Provider quote: ${provider.name} ${quote.gpuType} $${quote.pricePerHour}/hr source=${quote.priceSource}`,
-      );
-    }
+      } satisfies ProviderQuote;
+    });
 
     return quotes.sort((a, b) => a.pricePerHour - b.pricePerHour);
   }
