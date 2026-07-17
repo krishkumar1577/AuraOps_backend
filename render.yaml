@@ -1,0 +1,57 @@
+# Render Blueprint — AuraOps backend API
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Deploy:
+#   1. render login
+#   2. Dashboard → New → Blueprint → this repo  (first time)
+#      OR: render blueprints validate && open Blueprint URL
+#   3. Set secret env vars in the dashboard (never commit them)
+#   4. render deploys create   (redeploys)
+
+services:
+  - type: web
+    name: auraops-backend
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    # Auto-deploy on push to main (disable if you prefer manual)
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render injects PORT; app also reads PORT from env (default 3000)
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MONGODB_DB
+        value: auraops
+      - key: MAX_REQUEST_BODY_BYTES
+        value: "33554432"
+      - key: LOG_LEVEL
+        value: info
+      # Set these in the Render Dashboard after first create (secrets):
+      - key: MONGODB_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: MODAL_TOKEN_ID
+        sync: false
+      - key: MODAL_TOKEN_SECRET
+        sync: false
+      - key: API_URL
+        sync: false
+      # Optional
+      - key: AWS_REGION
+        value: us-east-1
+      - key: S3_BUCKET
+        value: aura-weights
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: LAMBDA_LABS_API_KEY
+        sync: false
+      - key: LOOPS_API_KEY
+        sync: false

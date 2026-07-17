@@ -12,7 +12,7 @@
 | **Goal** | Deterministic AI agent deployment to GPU in **<30s** (MVP), **<11s** (aspirational) |
 | **Stack** | TypeScript (strict) · Node.js · Fastify · MongoDB · Redis · Bull queue · AWS SDK · Modal SDK · Zod · Pino · Commander |
 | **Auth** | `@fastify/jwt` + scrypt (MongoDB user repo) |
-| **Status** | Production: `auraops-backend-production.up.railway.app` |
+| **Status** | Production: `https://auraops-backend-s2gw.onrender.com` |
 
 ---
 

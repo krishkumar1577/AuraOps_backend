@@ -4,7 +4,7 @@
 **Source files (973 lines total):** `index.ts` · `init.ts` · `deploy.ts` · `status.ts` · `logs.ts` · `terminate.ts` · `fleet.ts` · `localGpuCheck.ts` · `utils.ts`.
 **Shared helper:** `utils.ts` — colour-coded stdout/stderr, formatters, auth header resolver, default API URL, error handler.
 **Auth env:** `AURAOPS_API_TOKEN` (or `--token <jwt>`) → `Authorization: Bearer <token>`.
-**Default API URL:** `https://auraops-backend-production.up.railway.app` (overridable via `AURAOPS_API_URL`).
+**Default API URL:** `https://auraops-backend-s2gw.onrender.com` (overridable via `AURAOPS_API_URL`).
 
 ---
 
@@ -78,7 +78,7 @@ mindmap
         warn if missing
         return Bearer
       resolveApiUrl env AURAOPS_API_URL
-        default https railway
+        default https render
       handleError AuraOpsError
         fail details cause
         process exit 1

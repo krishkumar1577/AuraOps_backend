@@ -417,9 +417,42 @@ function hasLambdaLabsCredentials(): boolean {
   return !!config.lambda_labs_api_key;
 }
 
+/**
+ * Ensure REDIS_URL is parseable so createClient does not crash the process.
+ * Placeholders like CHANGE_ME_... from docs must not be pasted into Render.
+ */
+function resolveRedisUrl(raw: string): string {
+  const fallback = 'redis://127.0.0.1:6379';
+  const url = (raw || '').trim();
+
+  if (!url || /CHANGE_ME|your-redis|placeholder/i.test(url)) {
+    logger.warn(
+      'REDIS_URL is missing or still a placeholder (do not paste CHANGE_ME_... into Render). ' +
+        'Create Render Key Value or Upstash Redis and set redis:// / rediss:// URL. ' +
+        `Using ${fallback} so the API can boot — fix REDIS_URL for deploy state / SWR.`,
+    );
+    return fallback;
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') {
+      logger.warn(
+        `REDIS_URL must start with redis:// or rediss:// (got ${parsed.protocol}). Using ${fallback}`,
+      );
+      return fallback;
+    }
+    return url;
+  } catch {
+    logger.warn(`REDIS_URL is not a valid URL. Using ${fallback}`);
+    return fallback;
+  }
+}
+
 export function createDefaultOrchestrator(redisUrl: string): Orchestrator {
-  const redisClient = createClient({ url: redisUrl });
-  logger.info(`Initializing Orchestrator with Redis: ${redisUrl.substring(0, 15)}...`);
+  const safeRedisUrl = resolveRedisUrl(redisUrl);
+  const redisClient = createClient({ url: safeRedisUrl });
+  logger.info(`Initializing Orchestrator with Redis: ${safeRedisUrl.substring(0, 24)}...`);
   const providers: GPUProvider[] = [];
 
   if (config.modal_token_id && config.modal_token_secret) {

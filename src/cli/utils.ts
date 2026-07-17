@@ -468,7 +468,8 @@ export async function resolveAuthHeaders(token?: string): Promise<Record<string,
   return { Authorization: `Bearer ${resolved}` };
 }
 
-const DEFAULT_API_URL = 'https://auraopsbackend-production.up.railway.app';
+/** Production API (Render). Override with AURAOPS_API_URL. */
+const DEFAULT_API_URL = 'https://auraops-backend-s2gw.onrender.com';
 
 export function resolveApiUrl(): string {
   return process.env.AURAOPS_API_URL || DEFAULT_API_URL;

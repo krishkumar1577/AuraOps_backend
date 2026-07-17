@@ -228,7 +228,7 @@ Deep dive: [`docs/architecture/code-map.md`](docs/architecture/code-map.md) · C
 | `POST` | `/api/v1/weights/pull` | Queue weight pull |
 | `GET` | `/health` | Liveness (no auth) |
 
-Default production API (subject to change): see your deployment URL / `AURAOPS_API_URL`.
+Default production API: `https://auraops-backend-s2gw.onrender.com` (override with `AURAOPS_API_URL`).
 
 ---
 

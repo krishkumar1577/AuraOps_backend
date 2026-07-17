@@ -1,7 +1,7 @@
 {
   "name": "auraops",
-  "version": "0.1.1-alpha.3",
-  "description": "Deploy AI agents to GPU in seconds",
+  "version": "0.1.1-alpha.4",
+  "description": "Deploy Python AI agents to GPU (Modal-first) — init, package, fleet",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
