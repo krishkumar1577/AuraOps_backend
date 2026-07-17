@@ -49,8 +49,20 @@ export interface LangGraphMetadata {
   recommendedGpuMemoryGB: 8 | 16 | 24;
 }
 
+/** Framework labels used in blueprints / Modal scaffolding. */
+export type DetectedFramework =
+  | 'pytorch'
+  | 'langchain'
+  | 'langgraph'
+  | 'crewai'
+  | 'transformers'
+  | 'jax'
+  | 'tensorflow'
+  /** Plain Python agent (llama-cpp, GGUF, custom entrypoint) — common for founders. */
+  | 'python';
+
 export interface FrameworkFingerprint {
-  framework: 'pytorch' | 'langchain' | 'langgraph' | 'crewai' | 'transformers' | 'jax' | 'tensorflow';
+  framework: DetectedFramework;
   version: string;
   cudaVersion: string;
   pythonVersion: string;

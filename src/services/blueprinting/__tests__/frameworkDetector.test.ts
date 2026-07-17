@@ -81,7 +81,7 @@ describe('FrameworkDetector', () => {
     expect(result.cudaVersion).toBe('12.1');
   });
 
-  it('should throw error for unsupported framework', () => {
+  it('should fall back to python for unknown / plain agent deps', () => {
     const manifest: ParsedManifest = {
       framework: 'unknown',
       frameworkVersion: '0.0.0',
@@ -91,7 +91,38 @@ describe('FrameworkDetector', () => {
       },
     };
 
-    expect(() => detector.detect(manifest)).toThrow();
+    const result = detector.detect(manifest);
+    expect(result.framework).toBe('python');
+    expect(result.primaryUse).toBe('inference');
+  });
+
+  it('should detect llama-cpp-python GGUF stack as python (not transformers)', () => {
+    const manifest: ParsedManifest = {
+      framework: 'unknown',
+      frameworkVersion: '0.0.0',
+      pythonVersion: '3.11',
+      allDependencies: {
+        'llama-cpp-python': '>=0.3.8',
+      },
+    };
+
+    const result = detector.detect(manifest);
+    expect(result.framework).toBe('python');
+    expect(result.primaryUse).toBe('inference');
+  });
+
+  it('should not treat huggingface-hub alone as transformers', () => {
+    const manifest: ParsedManifest = {
+      framework: 'unknown',
+      frameworkVersion: '0.0.0',
+      pythonVersion: '3.11',
+      allDependencies: {
+        'huggingface-hub': '0.26.0',
+      },
+    };
+
+    const result = detector.detect(manifest);
+    expect(result.framework).toBe('python');
   });
 
   it('should infer training use case', () => {

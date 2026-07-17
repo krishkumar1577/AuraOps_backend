@@ -86,10 +86,16 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         }
 
         const msg = error instanceof Error ? error.message : String(error);
+        const causeRaw =
+          error instanceof Error
+            ? (error as Error & { cause?: unknown }).cause
+            : undefined;
         const cause =
-          error instanceof Error && error.cause
-            ? String((error.cause as Error).message ?? error.cause)
-            : '';
+          causeRaw instanceof Error
+            ? causeRaw.message
+            : causeRaw != null
+              ? String(causeRaw)
+              : '';
         const full = `${msg} ${cause}`;
         logger.error(`Registration error: ${full}`);
         // Almost all register 500s in prod are Mongo connection/auth misconfig
@@ -168,10 +174,16 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         }
 
         const msg = error instanceof Error ? error.message : String(error);
+        const causeRaw =
+          error instanceof Error
+            ? (error as Error & { cause?: unknown }).cause
+            : undefined;
         const cause =
-          error instanceof Error && error.cause
-            ? String((error.cause as Error).message ?? error.cause)
-            : '';
+          causeRaw instanceof Error
+            ? causeRaw.message
+            : causeRaw != null
+              ? String(causeRaw)
+              : '';
         const full = `${msg} ${cause}`;
         logger.error(`Login error: ${full}`);
         const dbDown =

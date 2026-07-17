@@ -5,6 +5,7 @@ import YAML from 'yaml';
 import type { ParsedManifest } from '../../types/blueprint.types';
 import { ManifestParsingError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
+import { parseRequirementLine } from './requirementSpec';
 
 export class ManifestParser {
   async parse(projectPath: string): Promise<ParsedManifest> {
@@ -96,6 +97,9 @@ export class ManifestParser {
       'pandas': 'pandas',
       'tensorflow': 'tensorflow',
       'jax': 'jax',
+      // GGUF / local LLM (founders)
+      'llama_cpp': 'llama-cpp-python',
+      'ctransformers': 'ctransformers',
     };
 
     for (const file of pythonFiles) {
@@ -266,18 +270,7 @@ export class ManifestParser {
   }
 
   private parseLine(line: string): [string, string] {
-    const match = line.match(/^([a-zA-Z0-9-_.]+)(.*)/);
-    if (!match) return ['', ''];
-
-    const name = match[1].toLowerCase();
-    const versionSpec = match[2].trim();
-
-    const cleanVersion = versionSpec
-      .replace(/^[<>=!]+/, '')
-      .split('[')[0]
-      .trim() || 'latest';
-
-    return [name, cleanVersion];
+    return parseRequirementLine(line);
   }
 
   private extractCudaVersion(deps: Record<string, string>): string | undefined {

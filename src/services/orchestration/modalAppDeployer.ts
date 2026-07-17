@@ -35,12 +35,28 @@ export interface ModalDeployConfig {
 }
 
 /** Re-indent a multi-line Python snippet (preserves blank lines). */
-function reindentPython(code: string, extraSpaces: number): string {
-  if (!extraSpaces) return code;
-  const pad = ' '.repeat(extraSpaces);
-  return code
-    .split('\n')
-    .map((line) => (line.trim().length === 0 ? line : pad + line))
+/**
+ * Re-base a Python snippet so every non-empty line starts at exactly `targetIndent` spaces
+ * (relative structure inside the block is preserved).
+ * Avoids nested `try:` IndentationError when the same loader is used at 12 vs 16 spaces.
+ */
+function reindentPython(code: string, targetIndent: number): string {
+  const lines = code.split('\n');
+  let minIndent = Infinity;
+  for (const line of lines) {
+    if (line.trim().length === 0) continue;
+    const match = line.match(/^ */);
+    minIndent = Math.min(minIndent, match ? match[0].length : 0);
+  }
+  if (!Number.isFinite(minIndent)) {
+    minIndent = 0;
+  }
+  const pad = ' '.repeat(Math.max(0, targetIndent));
+  return lines
+    .map((line) => {
+      if (line.trim().length === 0) return '';
+      return pad + line.slice(minIndent);
+    })
     .join('\n');
 }
 
@@ -268,9 +284,16 @@ ${cachedRunInference}        framework = "${blueprint.framework.framework}"
             except Exception as e:
                 return f"crewai-error:{e}"
 
+        elif framework == "python":
+            # Primary path is user entrypoint (run/handle). Scaffold has no model.
+            raise RuntimeError(
+                "Python agent has no scaffold inference. "
+                "Export run/handle/main from your agent.py (user project load should handle this)."
+            )
+
         else:
             raise ValueError(
-                f"Unsupported framework: {framework}. Supported: langchain, langgraph, crewai, transformers, pytorch, jax, tensorflow"
+                f"Unsupported framework: {framework}. Supported: langchain, langgraph, crewai, transformers, pytorch, jax, tensorflow, python"
             )
 ${mcpAsgiStub}
 # Health check endpoint
@@ -304,8 +327,11 @@ if __name__ == "__main__":
     .pip_install([${dependencies}])${addLocalDirChain}
 )`;
 
-      // Nested under `except: try:` needs +4 spaces vs top-level load try body
-      const nestedFallbackLoader = reindentPython(loaderCode, 4);
+      // Loader snippets are written with 12-space base; re-base for nest depth:
+      //   top-level load try body → 12 spaces
+      //   nested under `except: try:` → 16 spaces
+      const topLevelLoader = reindentPython(loaderCode, 12);
+      const nestedFallbackLoader = reindentPython(loaderCode, 16);
 
       const loadBody = includeUserProject
         ? `        self.user_module = None
@@ -323,7 +349,7 @@ ${nestedFallbackLoader}
             except Exception as e:
                 raise RuntimeError(f"Failed to load agent: {str(e)}")`
         : `        try:
-${loaderCode}
+${topLevelLoader}
             load_time = time.time() - start_time
             print(f"✓ Agent loaded in {load_time:.2f}s")
         except Exception as e:
@@ -464,9 +490,16 @@ ${runInferencePrefix}        framework = "${blueprint.framework.framework}"
             except Exception as e:
                 return f"crewai-error:{e}"
 
+        elif framework == "python":
+            # Primary path is user entrypoint (run/handle). Scaffold has no model.
+            raise RuntimeError(
+                "Python agent has no scaffold inference. "
+                "Export run/handle/main from your agent.py (user project load should handle this)."
+            )
+
         else:
             raise ValueError(
-                f"Unsupported framework: {framework}. Supported: langchain, langgraph, crewai, transformers, pytorch, jax, tensorflow"
+                f"Unsupported framework: {framework}. Supported: langchain, langgraph, crewai, transformers, pytorch, jax, tensorflow, python"
             )
 ${mcpAsgiStub}
 # Health check endpoint
@@ -492,6 +525,11 @@ if __name__ == "__main__":
   /**
    * Format dependencies from blueprint.dependencyLock
    */
+  /**
+   * Build pip_install list for Modal images.
+   * Version values may be full PEP 440 specs (">=0.3.8", "==1.2.3") or bare numbers.
+   * Never force `==` onto a range — that pinned llama-cpp to an unusable old build in live tests.
+   */
   private static formatDependencies(
     dependencyLock?: Record<string, string>,
     extraPackages: string[] = [],
@@ -499,18 +537,38 @@ if __name__ == "__main__":
     const required = ['fastapi[standard]', ...extraPackages];
 
     const userDeps = dependencyLock
-      ? Object.entries(dependencyLock).map(
-          ([pkg, version]) =>
-            `"${pkg}${version ? `==${version}` : ''}"`,
-        )
+      ? Object.entries(dependencyLock)
+          .filter(([pkg]) => Boolean(pkg))
+          .map(([pkg, version]) => `"${this.toPipRequirement(pkg, version)}"`)
       : [];
 
     const allDeps = [
-      ...required.map(d => `"${d}"`),
+      ...required.map((d) => `"${d}"`),
       ...userDeps,
     ];
 
     return allDeps.join(', ');
+  }
+
+  /** pkg + version lock → single pip requirement string. */
+  static toPipRequirement(pkg: string, version?: string): string {
+    const v = (version || '').trim();
+    if (!v || v === 'latest' || v === '*') {
+      return pkg;
+    }
+    // Full spec already: >=1.0, ==1.0.0, ~=1.2, !=1.0, 1.0.*, or multi-clause
+    if (/^[<>=!~]/.test(v) || v.includes(',') || v.includes('.*')) {
+      // Avoid pkg>==1.0 if someone stored ">=1.0" — already has operator
+      if (/^[<>=!~]/.test(v)) {
+        return `${pkg}${v}`;
+      }
+      return `${pkg}${v.startsWith('=') ? v : `==${v}`}`;
+    }
+    // Bare version → exact pin
+    if (/^\d/.test(v)) {
+      return `${pkg}==${v}`;
+    }
+    return `${pkg}${v}`;
   }
 
   /**
@@ -692,9 +750,18 @@ ${indent}model_path = "${customModels?.[0]?.path || 'model.h5'}"
 ${indent}self.model = tf.keras.models.load_model(model_path)
 ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
 
+      case 'python':
+        // Founders: GGUF + llama-cpp / plain agent.py — real work is user project load.
+        // Scaffold only documents the contract if user entrypoint is missing.
+        return `${indent}# Plain Python / GGUF agent scaffold (user project is primary).
+${indent}# Export run/handle/main/crew/graph from agent.py (or set entrypoint).
+${indent}self.agent = None
+${indent}self.model = None
+${indent}print("✓ Python agent runtime ready (expects user entrypoint: run/handle/main)")`;
+
       default:
         throw new Error(
-          `Unsupported framework: ${framework}. Supported: langchain, langgraph, crewai, transformers, pytorch, jax, tensorflow`,
+          `Unsupported framework: ${framework}. Supported: langchain, langgraph, crewai, transformers, pytorch, jax, tensorflow, python`,
         );
     }
   }
@@ -825,12 +892,13 @@ ${indent}print(f"✓ TensorFlow model loaded from {model_path}")`;
         logger.info(`Modal deploy full stderr: ${stderr}`);
 
         // Modal CLI may print the endpoint URL to stdout OR stderr.
-        // Rich/TTY output often wraps long URLs across lines — collapse whitespace first.
+        // Rich/TTY wraps long URLs and injects ANSI — strip + collapse before match.
         const combined = stdout + '\n' + stderr;
-        const flattened = combined.replace(/[ \t]*\n[ \t]*/g, '');
+        const stripped = combined.replace(/\u001b\[[0-9;]*m/g, '');
+        const flattened = stripped.replace(/[ \t]*\n[ \t]*/g, '');
         const urlMatch =
           flattened.match(/https:\/\/[a-zA-Z0-9._-]+\.modal\.run[^\s"'<>]*/i) ||
-          combined.match(/https:\/\/[^\s]*\.modal\.run[^\s]*/);
+          stripped.match(/https:\/\/[^\s]*\.modal\.run[^\s]*/);
         if (!urlMatch) {
           logger.warn(
             `Could not find HTTPS URL in Modal output. Combined output:\n${combined}`,
