@@ -85,10 +85,23 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
           });
         }
 
-        logger.error(`Registration error: ${error instanceof Error ? error.message : String(error)}`);
-        return reply.code(500).send({
+        const msg = error instanceof Error ? error.message : String(error);
+        const cause =
+          error instanceof Error && error.cause
+            ? String((error.cause as Error).message ?? error.cause)
+            : '';
+        const full = `${msg} ${cause}`;
+        logger.error(`Registration error: ${full}`);
+        // Almost all register 500s in prod are Mongo connection/auth misconfig
+        const dbDown =
+          /mongo|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|authentication failed|bad auth|timed out|SSL|TLS|server selection|topology|SCRAM|querySrv/i.test(
+            full,
+          );
+        return reply.code(dbDown ? 503 : 500).send({
           success: false,
-          error: 'Registration failed',
+          error: dbDown
+            ? 'Database unavailable. Set a valid MONGODB_URI on Render (Atlas Network Access 0.0.0.0/0), then redeploy.'
+            : `Registration failed: ${msg.slice(0, 160)}`,
         });
       }
     },
@@ -154,10 +167,22 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
           });
         }
 
-        logger.error(`Login error: ${error instanceof Error ? error.message : String(error)}`);
-        return reply.code(500).send({
+        const msg = error instanceof Error ? error.message : String(error);
+        const cause =
+          error instanceof Error && error.cause
+            ? String((error.cause as Error).message ?? error.cause)
+            : '';
+        const full = `${msg} ${cause}`;
+        logger.error(`Login error: ${full}`);
+        const dbDown =
+          /mongo|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|authentication failed|bad auth|timed out|SSL|TLS|server selection|topology|SCRAM|querySrv/i.test(
+            full,
+          );
+        return reply.code(dbDown ? 503 : 500).send({
           success: false,
-          error: 'Login failed',
+          error: dbDown
+            ? 'Database unavailable. Set a valid MONGODB_URI on Render (Atlas Network Access 0.0.0.0/0), then redeploy.'
+            : `Login failed: ${msg.slice(0, 160)}`,
         });
       }
     },

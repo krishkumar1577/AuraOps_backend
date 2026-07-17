@@ -29,8 +29,23 @@ let db: Db | null = null;
 
 async function getCollection(): Promise<Collection<UserDocument>> {
   if (!db) {
-    client = new MongoClient(config.mongodb_uri);
-    await client.connect();
+    const uri = config.mongodb_uri;
+    if (!uri || uri.includes('localhost') || uri.includes('127.0.0.1')) {
+      logger.error(
+        `MongoDB URI looks local/empty (starts with: ${String(uri).slice(0, 24)}...). Set MONGODB_URI on Render to Atlas mongodb+srv://...`,
+      );
+    }
+    client = new MongoClient(uri, {
+      serverSelectionTimeoutMS: 8_000,
+      connectTimeoutMS: 8_000,
+    });
+    try {
+      await client.connect();
+    } catch (err) {
+      client = null;
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`MongoDB connect failed: ${msg}`);
+    }
     db = client.db(config.mongodb_db);
     const collection = db.collection<UserDocument>('users');
     await collection.createIndex({ email: 1 }, { unique: true });
